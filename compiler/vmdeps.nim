@@ -7,7 +7,7 @@
 #    distribution, for details about the copyright.
 #
 
-import ast, types, msgs, osproc, streams, options, idents
+import ast, types, msgs, osproc, streams, options, idents, securehash
 
 proc readOutput(p: Process): string =
   result = ""
@@ -15,20 +15,41 @@ proc readOutput(p: Process): string =
   while not output.atEnd:
     result.add(output.readLine)
     result.add("\n")
-  result.setLen(result.len - "\n".len)
+  if result.len > 0:
+    result.setLen(result.len - "\n".len)
   discard p.waitForExit
 
-proc opGorge*(cmd, input: string): string =
-  try:
-    var p = startProcess(cmd, options={poEvalCommand})
-    if input.len != 0:
-      p.inputStream.write(input)
-      p.inputStream.close()
-    result = p.readOutput
-  except IOError, OSError:
-    result = ""
+proc opGorge*(cmd, input, cache: string): string =
+  if cache.len > 0:# and optForceFullMake notin gGlobalOptions:
+    let h = secureHash(cmd & "\t" & input & "\t" & cache)
+    let filename = options.toGeneratedFile("gorge_" & $h, "txt")
+    var f: File
+    if open(f, filename):
+      result = f.readAll
+      f.close
+      return
+    var readSuccessful = false
+    try:
+      var p = startProcess(cmd, options={poEvalCommand, poStderrToStdout})
+      if input.len != 0:
+        p.inputStream.write(input)
+        p.inputStream.close()
+      result = p.readOutput
+      readSuccessful = true
+      writeFile(filename, result)
+    except IOError, OSError:
+      if not readSuccessful: result = ""
+  else:
+    try:
+      var p = startProcess(cmd, options={poEvalCommand, poStderrToStdout})
+      if input.len != 0:
+        p.inputStream.write(input)
+        p.inputStream.close()
+      result = p.readOutput
+    except IOError, OSError:
+      result = ""
 
-proc opSlurp*(file: string, info: TLineInfo, module: PSym): string = 
+proc opSlurp*(file: string, info: TLineInfo, module: PSym): string =
   try:
     let filename = file.findFile
     result = readFile(filename)
@@ -42,6 +63,7 @@ proc opSlurp*(file: string, info: TLineInfo, module: PSym): string =
 
 proc atomicTypeX(name: string; t: PType; info: TLineInfo): PNode =
   let sym = newSym(skType, getIdent(name), t.owner, info)
+  sym.typ = t
   result = newSymNode(sym)
   result.typ = t
 
@@ -87,7 +109,12 @@ proc mapTypeToAst(t: PType, info: TLineInfo; allowRecursion=false): PNode =
       result.add mapTypeToAst(t.sons[i], info)
   of tyGenericInst, tyGenericBody, tyOrdinal, tyUserTypeClassInst:
     result = mapTypeToAst(t.lastSon, info)
-  of tyGenericParam, tyDistinct, tyForward: result = atomicType(t.sym.name.s)
+  of tyDistinct:
+    if allowRecursion:
+      result = mapTypeToBracket("distinct", t, info)
+    else:
+      result = atomicType(t.sym.name.s)
+  of tyGenericParam, tyForward: result = atomicType(t.sym.name.s)
   of tyObject:
     if allowRecursion:
       result = newNodeIT(nkObjectTy, info, t)
@@ -138,7 +165,9 @@ proc mapTypeToAst(t: PType, info: TLineInfo; allowRecursion=false): PNode =
   of tyIter: result = mapTypeToBracket("iter", t, info)
   of tyProxy: result = atomicType"error"
   of tyBuiltInTypeClass: result = mapTypeToBracket("builtinTypeClass", t, info)
-  of tyUserTypeClass: result = mapTypeToBracket("userTypeClass", t, info)
+  of tyUserTypeClass:
+    result = mapTypeToBracket("concept", t, info)
+    result.add t.n.copyTree
   of tyCompositeTypeClass: result = mapTypeToBracket("compositeTypeClass", t, info)
   of tyAnd: result = mapTypeToBracket("and", t, info)
   of tyOr: result = mapTypeToBracket("or", t, info)

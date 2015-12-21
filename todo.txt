@@ -1,48 +1,46 @@
-version 0.10.4
-==============
+essential for 1.0
+=================
 
-- improve GC-unsafety warnings
-- make 'nil' work for 'add' and 'len'
-- disallow negative indexing
-- improve the parser; deal with  echo $foo  gotcha
+- introduce newSeqOfCap(10)
+- The remaining bugs of the lambda lifting pass that is responsible to enable
+  closures and closure iterators need to be fixed.
+- ``concept`` needs to be refined, a nice name for the feature is not enough.
+- Destructors need to be refined.
+- make '--implicitStatic:on' the default; then we can also clean up the
+  'static[T]' mess in the compiler!
+
+- add "all threads are blocked" detection to 'spawn'
+- Deprecate ``immediate`` for templates and macros
+- document NimMain and check whether it works for threading
+- remove   echo $foo  gotcha
+- ``not`` or ``~`` for the effects system
 
 
-version 1.0
-===========
+Not critical for 1.0
+====================
 
 - figure out why C++ bootstrapping is so much slower
-- nimsuggest: auto-completion needs to work in 'class' macros
-- improve the docs for inheritance
-- The bitwise 'not' operator will be renamed to 'bnot' to
+- The bitwise 'not' operator cold be renamed to 'bnot' to
   prevent 'not 4 == 5' from compiling. -> requires 'mixin' annotation for procs!
-- iterators always require a return type
-- overloading of '='
+- make 'nil' work for 'add':
+  - resizeString
+  - incrSeq
+  - addChar
+- pragmas need 'bindSym' support
+- allow simple read accesses to global variables --> difficult to ensure that
+  no data races happen
+- pragmas need re-work: 'push' is dangerous, 'hasPragma' does not work
+  reliably with user-defined pragmas
+- memory manager: add a measure of fragmentation
+- we need a magic thisModule symbol
+- optimize 'genericReset'; 'newException' leads to code bloat
 
-- make nimble part of the distribution
-- split docgen into separate tool
-- special rule for ``[]=``, items, pairs
-- BUG: echo with template `$`*(info: TLineInfo): expr = toFileLineCol(info)
-
-
-Concurrency
------------
-
-- test 'deepCopy' for closures
-- implement 'foo[1..4] = spawn(f[4..7])'
-
-Low priority:
-- support for exception propagation? (hard to implement)
-- the copying of the 'ref Promise' into the thead local storage only
-  happens to work due to the write barrier's implementation
-
-
-Misc
-----
-
-- make '--implicitStatic:on' the default
-- make tuple unpacking work in a non-var/let context
-- built-in 'getImpl'
-- prevent 'alloc(TypeWithGCedMemory)'
+- prevent 'alloc(TypeWithGCedMemory)'?
+- split docgen into separate tool; not happy how it worked with ``nimsuggest``
+  though
+- map ``string`` and ``seq`` to ``std::string`` and ``std::vector``
+- macro support for '='; bind '=' to a memory region
+- macros as type pragmas
 
 
 Bugs
@@ -50,32 +48,10 @@ Bugs
 
 - VM: Pegs do not work at compile-time
 - VM: ptr/ref T cannot work in general
-- scopes are still broken for generic instantiation!
 - blocks can "export" an identifier but the CCG generates {} for them ...
 - ConcreteTypes in a 'case' means we don't check for duplicated case branches
+- BUG: echo with template `$`*(info: TLineInfo): expr = toFileLineCol(info)
 
-
-version 0.9.x
-=============
-
-- pragmas need 'bindSym' support
-- allow simple read accesses to global variables --> difficult to ensure that
-  no data races happen
-- pragmas need re-work: 'push' is dangerous, 'hasPragma' does not work
-  reliably with user-defined pragmas
-- memory manager: add a measure of fragmentation
-- implement 'bits' pragmas
-- we need a magic thisModule symbol
-- optimize 'genericReset'; 'newException' leads to code bloat
-- The 'do' notation might be trimmed so that its only purpose is to pass
-  multiple multi line constructs to a macro.
-
-
-version 0.9.X
-=============
-
-- macros as type pragmas
-- document NimMain and check whether it works for threading
 
 GC
 ==
@@ -85,6 +61,18 @@ GC
 - provide tool/API to track leaks/object counts
 - resizing of strings/sequences could take into account the memory that
   is allocated
+
+
+Concurrency
+===========
+
+- test 'deepCopy' for closures
+- implement 'foo[1..4] = spawn(f[4..7])'
+
+Low priority:
+- support for exception propagation? (hard to implement)
+- the copying of the 'ref Promise' into the thead local storage only
+  happens to work due to the write barrier's implementation
 
 
 CGEN

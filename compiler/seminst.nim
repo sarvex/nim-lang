@@ -10,14 +10,10 @@
 # This module implements the instantiation of generic procs.
 # included from sem.nim
 
-proc instantiateGenericParamList(c: PContext, n: PNode, pt: TIdTable,
-                                 entry: var TInstantiation) =
-  if n.kind != nkGenericParams:
-    internalError(n.info, "instantiateGenericParamList; no generic params")
-  newSeq(entry.concreteTypes, n.len)
+iterator instantiateGenericParamList(c: PContext, n: PNode, pt: TIdTable): PSym =
+  internalAssert n.kind == nkGenericParams
   for i, a in n.pairs:
-    if a.kind != nkSym:
-      internalError(a.info, "instantiateGenericParamList; no symbol")
+    internalAssert a.kind == nkSym
     var q = a.sym
     if q.typ.kind notin {tyTypeDesc, tyGenericParam, tyStatic, tyIter}+tyTypeClasses:
       continue
@@ -42,8 +38,7 @@ proc instantiateGenericParamList(c: PContext, n: PNode, pt: TIdTable,
       #t = ReplaceTypeVarsT(cl, t)
     s.typ = t
     if t.kind == tyStatic: s.ast = t.n
-    addDecl(c, s)
-    entry.concreteTypes[i] = t
+    yield s
 
 proc sameInstantiation(a, b: TInstantiation): bool =
   if a.concreteTypes.len == b.concreteTypes.len:
@@ -52,10 +47,11 @@ proc sameInstantiation(a, b: TInstantiation): bool =
                           flags = {ExactTypeDescValues}): return
     result = true
 
-proc genericCacheGet(genericSym: PSym, entry: TInstantiation): PSym =
+proc genericCacheGet(genericSym: PSym, entry: TInstantiation;
+                     id: CompilesId): PSym =
   if genericSym.procInstCache != nil:
     for inst in genericSym.procInstCache:
-      if sameInstantiation(entry, inst[]):
+      if inst.compilesId == id and sameInstantiation(entry, inst[]):
         return inst.sym
 
 proc removeDefaultParamValues(n: PNode) =
@@ -169,14 +165,16 @@ proc instantiateProcType(c: PContext, pt: TIdTable,
   addDecl(c, prc)
 
   pushInfoContext(info)
-  var cl = initTypeVars(c, pt, info)
+  var cl = initTypeVars(c, pt, info, nil)
   var result = instCopyType(cl, prc.typ)
   let originalParams = result.n
   result.n = originalParams.shallowCopy
 
   for i in 1 .. <result.len:
     # twrong_field_caching requires these 'resetIdTable' calls:
-    if i > 1: resetIdTable(cl.symMap)
+    if i > 1:
+      resetIdTable(cl.symMap)
+      resetIdTable(cl.localCache)
     result.sons[i] = replaceTypeVarsT(cl, result.sons[i])
     propagateToOwner(result, result.sons[i])
     internalAssert originalParams[i].kind == nkSym
@@ -185,7 +183,9 @@ proc instantiateProcType(c: PContext, pt: TIdTable,
       let param = copySym(oldParam)
       param.owner = prc
       param.typ = result.sons[i]
-      param.ast = oldParam.ast.copyTree
+      if oldParam.ast != nil:
+        param.ast = fitNode(c, param.typ, oldParam.ast)
+
       # don't be lazy here and call replaceTypeVarsN(cl, originalParams[i])!
       result.n.sons[i] = newSymNode(param)
       addDecl(c, param)
@@ -196,6 +196,7 @@ proc instantiateProcType(c: PContext, pt: TIdTable,
       addDecl(c, result.n.sons[i].sym)
 
   resetIdTable(cl.symMap)
+  resetIdTable(cl.localCache)
   result.sons[0] = replaceTypeVarsT(cl, result.sons[0])
   result.n.sons[0] = originalParams[0].copyTree
 
@@ -212,7 +213,7 @@ proc generateInstance(c: PContext, fn: PSym, pt: TIdTable,
   ## The `pt` parameter is a type-unsafe mapping table used to link generic
   ## parameters to their concrete types within the generic instance.
   # no need to instantiate generic templates/macros:
-  if fn.kind in {skTemplate, skMacro}: return fn
+  internalAssert fn.kind notin {skMacro, skTemplate}
   # generates an instantiated proc
   if c.instCounter > 1000: internalError(fn.ast.info, "nesting too deep")
   inc(c.instCounter)
@@ -221,30 +222,49 @@ proc generateInstance(c: PContext, fn: PSym, pt: TIdTable,
   # NOTE: for access of private fields within generics from a different module
   # we set the friend module:
   c.friendModules.add(getModule(fn))
-  #let oldScope = c.currentScope
-  #c.currentScope = fn.scope
+  let oldInTypeClass = c.inTypeClass
+  c.inTypeClass = 0
+  let oldScope = c.currentScope
+  while not isTopLevel(c): c.currentScope = c.currentScope.parent
   result = copySym(fn, false)
   incl(result.flags, sfFromGeneric)
   result.owner = fn
   result.ast = n
   pushOwner(result)
+
   openScope(c)
-  internalAssert n.sons[genericParamsPos].kind != nkEmpty
+  let gp = n.sons[genericParamsPos]
+  internalAssert gp.kind != nkEmpty
   n.sons[namePos] = newSymNode(result)
   pushInfoContext(info)
   var entry = TInstantiation.new
   entry.sym = result
-  instantiateGenericParamList(c, n.sons[genericParamsPos], pt, entry[])
+  # we need to compare both the generic types and the concrete types:
+  # generic[void](), generic[int]()
+  # see ttypeor.nim test.
+  var i = 0
+  newSeq(entry.concreteTypes, fn.typ.len+gp.len-1)
+  for s in instantiateGenericParamList(c, gp, pt):
+    addDecl(c, s)
+    entry.concreteTypes[i] = s.typ
+    inc i
   pushProcCon(c, result)
   instantiateProcType(c, pt, result, info)
+  for j in 1 .. result.typ.len-1:
+    entry.concreteTypes[i] = result.typ.sons[j]
+    inc i
+  if tfTriggersCompileTime in result.typ.flags:
+    incl(result.flags, sfCompileTime)
   n.sons[genericParamsPos] = ast.emptyNode
-  var oldPrc = genericCacheGet(fn, entry[])
+  var oldPrc = genericCacheGet(fn, entry[], c.compilesContextId)
   if oldPrc == nil:
     # we MUST not add potentially wrong instantiations to the caching mechanism.
     # This means recursive instantiations behave differently when in
     # a ``compiles`` context but this is the lesser evil. See
     # bug #1055 (tevilcompiles).
-    if c.inCompilesContext == 0: fn.procInstCache.safeAdd(entry)
+    #if c.compilesContextId == 0:
+    entry.compilesId = c.compilesContextId
+    fn.procInstCache.safeAdd(entry)
     c.generics.add(makeInstPair(fn, entry))
     if n.sons[pragmasPos].kind != nkEmpty:
       pragma(c, result, n.sons[pragmasPos], allRoutinePragmas)
@@ -259,7 +279,8 @@ proc generateInstance(c: PContext, fn: PSym, pt: TIdTable,
   popInfoContext()
   closeScope(c)           # close scope for parameters
   popOwner()
-  #c.currentScope = oldScope
+  c.currentScope = oldScope
   discard c.friendModules.pop()
   dec(c.instCounter)
+  c.inTypeClass = oldInTypeClass
   if result.kind == skMethod: finishMethod(c, result)

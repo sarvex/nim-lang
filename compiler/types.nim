@@ -395,7 +395,7 @@ proc rangeToStr(n: PNode): string =
 
 const
   typeToStr: array[TTypeKind, string] = ["None", "bool", "Char", "empty",
-    "Array Constructor [$1]", "nil", "expr", "stmt", "typeDesc",
+    "Array Constructor [$1]", "nil", "untyped", "typed", "typeDesc",
     "GenericInvocation", "GenericBody", "GenericInst", "GenericParam",
     "distinct $1", "enum", "ordinal[$1]", "array[$1, $2]", "object", "tuple",
     "set[$1]", "range[$1]", "ptr ", "ref ", "var ", "seq[$1]", "proc",
@@ -411,6 +411,10 @@ const
 
 const preferToResolveSymbols = {preferName, preferModuleInfo, preferGenericArg}
 
+proc addTypeFlags(name: var string, typ: PType) {.inline.} =
+  if tfShared in typ.flags: name = "shared " & name
+  if tfNotNil in typ.flags: name.add(" not nil")
+
 proc typeToString(typ: PType, prefer: TPreferedDesc = preferName): string =
   var t = typ
   result = ""
@@ -418,11 +422,13 @@ proc typeToString(typ: PType, prefer: TPreferedDesc = preferName): string =
   if prefer in preferToResolveSymbols and t.sym != nil and
        sfAnon notin t.sym.flags:
     if t.kind == tyInt and isIntLit(t):
-      return t.sym.name.s & " literal(" & $t.n.intVal & ")"
-    if prefer == preferName or t.sym.owner.isNil:
-      return t.sym.name.s
+      result = t.sym.name.s & " literal(" & $t.n.intVal & ")"
+    elif prefer == preferName or t.sym.owner.isNil:
+      result = t.sym.name.s
     else:
-      return t.sym.owner.name.s & '.' & t.sym.name.s
+      result = t.sym.owner.name.s & '.' & t.sym.name.s
+    result.addTypeFlags(t)
+    return
   case t.kind
   of tyInt:
     if not isIntLit(t) or prefer == preferExported:
@@ -434,7 +440,7 @@ proc typeToString(typ: PType, prefer: TPreferedDesc = preferName): string =
         result = "int literal(" & $t.n.intVal & ")"
   of tyGenericBody, tyGenericInst, tyGenericInvocation:
     result = typeToString(t.sons[0]) & '['
-    for i in countup(1, sonsLen(t) -1 -ord(t.kind != tyGenericInvocation)):
+    for i in countup(1, sonsLen(t)-1-ord(t.kind != tyGenericInvocation)):
       if i > 1: add(result, ", ")
       add(result, typeToString(t.sons[i], preferGenericArg))
     add(result, ']')
@@ -481,7 +487,7 @@ proc typeToString(typ: PType, prefer: TPreferedDesc = preferName): string =
     result = "not " & typeToString(t.sons[0])
   of tyExpr:
     internalAssert t.len == 0
-    result = "expr"
+    result = "untyped"
   of tyFromExpr, tyFieldAccessor:
     result = renderTree(t.n)
   of tyArray:
@@ -541,6 +547,9 @@ proc typeToString(typ: PType, prefer: TPreferedDesc = preferName): string =
   of tyProc:
     result = if tfIterator in t.flags: "iterator (" else: "proc ("
     for i in countup(1, sonsLen(t) - 1):
+      if t.n != nil and i < t.n.len and t.n[i].kind == nkSym:
+        add(result, t.n[i].sym.name.s)
+        add(result, ": ")
       add(result, typeToString(t.sons[i]))
       if i < sonsLen(t) - 1: add(result, ", ")
     add(result, ')')
@@ -560,8 +569,7 @@ proc typeToString(typ: PType, prefer: TPreferedDesc = preferName): string =
     result = typeToStr[t.kind] % typeToString(t.sons[0])
   else:
     result = typeToStr[t.kind]
-  if tfShared in t.flags: result = "shared " & result
-  if tfNotNil in t.flags: result.add(" not nil")
+  result.addTypeFlags(t)
 
 proc resultType(t: PType): PType =
   assert(t.kind == tyProc)
@@ -590,7 +598,7 @@ proc firstOrd(t: PType): BiggestInt =
   of tyUInt..tyUInt64: result = 0
   of tyEnum:
     # if basetype <> nil then return firstOrd of basetype
-    if (sonsLen(t) > 0) and (t.sons[0] != nil):
+    if sonsLen(t) > 0 and t.sons[0] != nil:
       result = firstOrd(t.sons[0])
     else:
       assert(t.n.sons[0].kind == nkSym)
@@ -919,6 +927,9 @@ proc sameTypeAux(x, y: PType, c: var TSameTypeClosure): bool =
     result = sameFlags(a, b)
   of tyStatic, tyFromExpr:
     result = exprStructuralEquivalent(a.n, b.n) and sameFlags(a, b)
+    if result and a.len == b.len and a.len == 1:
+      cycleCheck()
+      result = sameTypeAux(a.sons[0], b.sons[0], c)
   of tyObject:
     ifFastObjectTypeCheckFailed(a, b):
       cycleCheck()
@@ -980,7 +991,9 @@ proc compareTypes*(x, y: PType,
   var c = initSameTypeClosure()
   c.cmp = cmp
   c.flags = flags
-  result = sameTypeAux(x, y, c)
+  if x == y: result = true
+  elif x.isNil or y.isNil: result = false
+  else: result = sameTypeAux(x, y, c)
 
 proc inheritanceDiff*(a, b: PType): int =
   # | returns: 0 iff `a` == `b`
@@ -1089,9 +1102,11 @@ proc typeAllowedAux(marker: var IntSet, typ: PType, kind: TSymKind,
       if result != nil: break
     if result.isNil and t.sons[0] != nil:
       result = typeAllowedAux(marker, t.sons[0], skResult, flags)
-  of tyExpr, tyStmt, tyTypeDesc, tyStatic:
+  of tyTypeDesc:
+    # XXX: This is still a horrible idea...
     result = nil
-    # XXX er ... no? these should not be allowed!
+  of tyExpr, tyStmt, tyStatic:
+    if kind notin {skParam, skResult}: result = t
   of tyEmpty:
     if taField notin flags: result = t
   of tyTypeClasses:
@@ -1252,13 +1267,16 @@ proc computeSizeAux(typ: PType, a: var BiggestInt): BiggestInt =
       else: result = 8
     a = result
   of tySet:
-    length = lengthOrd(typ.sons[0])
-    if length <= 8: result = 1
-    elif length <= 16: result = 2
-    elif length <= 32: result = 4
-    elif length <= 64: result = 8
-    elif align(length, 8) mod 8 == 0: result = align(length, 8) div 8
-    else: result = align(length, 8) div 8 + 1
+    if typ.sons[0].kind == tyGenericParam:
+      result = szUnknownSize
+    else:
+      length = lengthOrd(typ.sons[0])
+      if length <= 8: result = 1
+      elif length <= 16: result = 2
+      elif length <= 32: result = 4
+      elif length <= 64: result = 8
+      elif align(length, 8) mod 8 == 0: result = align(length, 8) div 8
+      else: result = align(length, 8) div 8 + 1
     a = result
   of tyRange:
     result = computeSizeAux(typ.sons[0], a)
@@ -1431,3 +1449,45 @@ proc skipConv*(n: PNode): PNode =
 proc skipConvTakeType*(n: PNode): PNode =
   result = n.skipConv
   result.typ = n.typ
+
+proc isEmptyContainer*(t: PType): bool =
+  case t.kind
+  of tyExpr, tyNil: result = true
+  of tyArray, tyArrayConstr: result = t.sons[1].kind == tyEmpty
+  of tySet, tySequence, tyOpenArray, tyVarargs:
+    result = t.sons[0].kind == tyEmpty
+  of tyGenericInst: result = isEmptyContainer(t.lastSon)
+  else: result = false
+
+proc takeType*(formal, arg: PType): PType =
+  # param: openArray[string] = []
+  # [] is an array constructor of length 0 of type string!
+  if arg.kind == tyNil:
+    # and not (formal.kind == tyProc and formal.callConv == ccClosure):
+    result = formal
+  elif formal.kind in {tyOpenArray, tyVarargs, tySequence} and
+      arg.isEmptyContainer:
+    let a = copyType(arg.skipTypes({tyGenericInst}), arg.owner, keepId=false)
+    a.sons[ord(arg.kind in {tyArray, tyArrayConstr})] = formal.sons[0]
+    result = a
+  elif formal.kind in {tyTuple, tySet} and arg.kind == formal.kind:
+    result = formal
+  else:
+    result = arg
+
+proc skipHiddenSubConv*(n: PNode): PNode =
+  if n.kind == nkHiddenSubConv:
+    # param: openArray[string] = []
+    # [] is an array constructor of length 0 of type string!
+    let formal = n.typ
+    result = n.sons[1]
+    let arg = result.typ
+    let dest = takeType(formal, arg)
+    if dest == arg and formal.kind != tyExpr:
+      #echo n.info, " came here for ", formal.typeToString
+      result = n
+    else:
+      result = copyTree(result)
+      result.typ = dest
+  else:
+    result = n

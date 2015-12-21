@@ -8,8 +8,8 @@
 #
 
 ## This module implements a simple high performance `JSON`:idx:
-## parser. JSON (JavaScript Object Notation) is a lightweight 
-## data-interchange format that is easy for humans to read and write 
+## parser. JSON (JavaScript Object Notation) is a lightweight
+## data-interchange format that is easy for humans to read and write
 ## (unlike XML). It is easy for machines to parse and generate.
 ## JSON is based on a subset of the JavaScript Programming Language,
 ## Standard ECMA-262 3rd Edition - December 1999.
@@ -50,10 +50,10 @@
 ##       }
 ##     ]
 
-import 
+import
   hashes, strutils, lexbase, streams, unicode, macros
 
-type 
+type
   JsonEventKind* = enum  ## enumeration of all events that may occur when parsing
     jsonError,           ## an error occurred during parsing
     jsonEof,             ## end of file reached
@@ -67,8 +67,8 @@ type
     jsonObjectEnd,       ## end of an object: the ``}`` token
     jsonArrayStart,      ## start of an array: the ``[`` token
     jsonArrayEnd         ## start of an array: the ``]`` token
-    
-  TTokKind = enum        # must be synchronized with TJsonEventKind!
+
+  TokKind = enum         # must be synchronized with TJsonEventKind!
     tkError,
     tkEof,
     tkString,
@@ -83,7 +83,7 @@ type
     tkBracketRi,
     tkColon,
     tkComma
-    
+
   JsonError* = enum        ## enumeration that lists all errors that can occur
     errNone,               ## no error
     errInvalidToken,       ## invalid token
@@ -96,22 +96,22 @@ type
     errEOC_Expected,       ## ``*/`` expected
     errEofExpected,        ## EOF expected
     errExprExpected        ## expr expected
-    
-  ParserState = enum 
+
+  ParserState = enum
     stateEof, stateStart, stateObject, stateArray, stateExpectArrayComma,
     stateExpectObjectComma, stateExpectColon, stateExpectValue
 
   JsonParser* = object of BaseLexer ## the parser object.
     a: string
-    tok: TTokKind
+    tok: TokKind
     kind: JsonEventKind
     err: JsonError
     state: seq[ParserState]
     filename: string
 
 {.deprecated: [TJsonEventKind: JsonEventKind, TJsonError: JsonError,
-  TJsonParser: JsonParser].}
- 
+  TJsonParser: JsonParser, TTokKind: TokKind].}
+
 const
   errorMessages: array [JsonError, string] = [
     "no error",
@@ -126,7 +126,7 @@ const
     "EOF expected",
     "expression expected"
   ]
-  tokToStr: array [TTokKind, string] = [
+  tokToStr: array [TokKind, string] = [
     "invalid token",
     "EOF",
     "string literal",
@@ -146,56 +146,56 @@ proc open*(my: var JsonParser, input: Stream, filename: string) =
   my.state = @[stateStart]
   my.kind = jsonError
   my.a = ""
-  
-proc close*(my: var JsonParser) {.inline.} = 
+
+proc close*(my: var JsonParser) {.inline.} =
   ## closes the parser `my` and its associated input stream.
   lexbase.close(my)
 
-proc str*(my: JsonParser): string {.inline.} = 
-  ## returns the character data for the events: ``jsonInt``, ``jsonFloat``, 
+proc str*(my: JsonParser): string {.inline.} =
+  ## returns the character data for the events: ``jsonInt``, ``jsonFloat``,
   ## ``jsonString``
   assert(my.kind in {jsonInt, jsonFloat, jsonString})
   return my.a
 
-proc getInt*(my: JsonParser): BiggestInt {.inline.} = 
+proc getInt*(my: JsonParser): BiggestInt {.inline.} =
   ## returns the number for the event: ``jsonInt``
   assert(my.kind == jsonInt)
   return parseBiggestInt(my.a)
 
-proc getFloat*(my: JsonParser): float {.inline.} = 
+proc getFloat*(my: JsonParser): float {.inline.} =
   ## returns the number for the event: ``jsonFloat``
   assert(my.kind == jsonFloat)
   return parseFloat(my.a)
 
-proc kind*(my: JsonParser): JsonEventKind {.inline.} = 
+proc kind*(my: JsonParser): JsonEventKind {.inline.} =
   ## returns the current event type for the JSON parser
   return my.kind
-  
-proc getColumn*(my: JsonParser): int {.inline.} = 
+
+proc getColumn*(my: JsonParser): int {.inline.} =
   ## get the current column the parser has arrived at.
   result = getColNumber(my, my.bufpos)
 
-proc getLine*(my: JsonParser): int {.inline.} = 
+proc getLine*(my: JsonParser): int {.inline.} =
   ## get the current line the parser has arrived at.
   result = my.lineNumber
 
-proc getFilename*(my: JsonParser): string {.inline.} = 
+proc getFilename*(my: JsonParser): string {.inline.} =
   ## get the filename of the file that the parser processes.
   result = my.filename
-  
-proc errorMsg*(my: JsonParser): string = 
+
+proc errorMsg*(my: JsonParser): string =
   ## returns a helpful error message for the event ``jsonError``
   assert(my.kind == jsonError)
   result = "$1($2, $3) Error: $4" % [
     my.filename, $getLine(my), $getColumn(my), errorMessages[my.err]]
 
-proc errorMsgExpected*(my: JsonParser, e: string): string = 
+proc errorMsgExpected*(my: JsonParser, e: string): string =
   ## returns an error message "`e` expected" in the same format as the
-  ## other error messages 
+  ## other error messages
   result = "$1($2, $3) Error: $4" % [
     my.filename, $getLine(my), $getColumn(my), e & " expected"]
 
-proc handleHexChar(c: char, x: var int): bool = 
+proc handleHexChar(c: char, x: var int): bool =
   result = true # Success
   case c
   of '0'..'9': x = (x shl 4) or (ord(c) - ord('0'))
@@ -203,13 +203,22 @@ proc handleHexChar(c: char, x: var int): bool =
   of 'A'..'F': x = (x shl 4) or (ord(c) - ord('A') + 10)
   else: result = false # error
 
-proc parseString(my: var JsonParser): TTokKind =
+proc parseEscapedUTF16(buf: cstring, pos: var int): int =
+  result = 0
+  #UTF-16 escape is always 4 bytes.
+  for _ in 0..3:
+    if handleHexChar(buf[pos], result):
+      inc(pos)
+    else:
+      return -1
+
+proc parseString(my: var JsonParser): TokKind =
   result = tkString
   var pos = my.bufpos + 1
   var buf = my.buf
   while true:
-    case buf[pos] 
-    of '\0': 
+    case buf[pos]
+    of '\0':
       my.err = errQuoteExpected
       result = tkError
       break
@@ -218,41 +227,52 @@ proc parseString(my: var JsonParser): TTokKind =
       break
     of '\\':
       case buf[pos+1]
-      of '\\', '"', '\'', '/': 
+      of '\\', '"', '\'', '/':
         add(my.a, buf[pos+1])
         inc(pos, 2)
       of 'b':
         add(my.a, '\b')
-        inc(pos, 2)      
+        inc(pos, 2)
       of 'f':
         add(my.a, '\f')
-        inc(pos, 2)      
+        inc(pos, 2)
       of 'n':
         add(my.a, '\L')
-        inc(pos, 2)      
+        inc(pos, 2)
       of 'r':
         add(my.a, '\C')
-        inc(pos, 2)    
+        inc(pos, 2)
       of 't':
         add(my.a, '\t')
         inc(pos, 2)
       of 'u':
         inc(pos, 2)
-        var r: int
-        if handleHexChar(buf[pos], r): inc(pos)
-        if handleHexChar(buf[pos], r): inc(pos)
-        if handleHexChar(buf[pos], r): inc(pos)
-        if handleHexChar(buf[pos], r): inc(pos)
+        var r = parseEscapedUTF16(buf, pos)
+        if r < 0:
+          my.err = errInvalidToken
+          break
+        # Deal with surrogates
+        if (r and 0xfc00) == 0xd800:
+          if buf[pos] & buf[pos+1] != "\\u":
+            my.err = errInvalidToken
+            break
+          inc(pos, 2)
+          var s = parseEscapedUTF16(buf, pos)
+          if (s and 0xfc00) == 0xdc00 and s > 0:
+            r = 0x10000 + (((r - 0xd800) shl 10) or (s - 0xdc00))
+          else:
+            my.err = errInvalidToken
+            break
         add(my.a, toUTF8(Rune(r)))
-      else: 
+      else:
         # don't bother with the error
         add(my.a, buf[pos])
         inc(pos)
-    of '\c': 
+    of '\c':
       pos = lexbase.handleCR(my, pos)
       buf = my.buf
       add(my.a, '\c')
-    of '\L': 
+    of '\L':
       pos = lexbase.handleLF(my, pos)
       buf = my.buf
       add(my.a, '\L')
@@ -260,25 +280,25 @@ proc parseString(my: var JsonParser): TTokKind =
       add(my.a, buf[pos])
       inc(pos)
   my.bufpos = pos # store back
-  
-proc skip(my: var JsonParser) = 
+
+proc skip(my: var JsonParser) =
   var pos = my.bufpos
   var buf = my.buf
-  while true: 
+  while true:
     case buf[pos]
-    of '/': 
-      if buf[pos+1] == '/': 
+    of '/':
+      if buf[pos+1] == '/':
         # skip line comment:
         inc(pos, 2)
         while true:
-          case buf[pos] 
-          of '\0': 
+          case buf[pos]
+          of '\0':
             break
-          of '\c': 
+          of '\c':
             pos = lexbase.handleCR(my, pos)
             buf = my.buf
             break
-          of '\L': 
+          of '\L':
             pos = lexbase.handleLF(my, pos)
             buf = my.buf
             break
@@ -288,44 +308,44 @@ proc skip(my: var JsonParser) =
         # skip long comment:
         inc(pos, 2)
         while true:
-          case buf[pos] 
-          of '\0': 
+          case buf[pos]
+          of '\0':
             my.err = errEOC_Expected
             break
-          of '\c': 
+          of '\c':
             pos = lexbase.handleCR(my, pos)
             buf = my.buf
-          of '\L': 
+          of '\L':
             pos = lexbase.handleLF(my, pos)
             buf = my.buf
           of '*':
             inc(pos)
-            if buf[pos] == '/': 
+            if buf[pos] == '/':
               inc(pos)
               break
           else:
             inc(pos)
-      else: 
+      else:
         break
-    of ' ', '\t': 
+    of ' ', '\t':
       inc(pos)
-    of '\c':  
+    of '\c':
       pos = lexbase.handleCR(my, pos)
       buf = my.buf
-    of '\L': 
+    of '\L':
       pos = lexbase.handleLF(my, pos)
       buf = my.buf
     else:
       break
   my.bufpos = pos
 
-proc parseNumber(my: var JsonParser) = 
+proc parseNumber(my: var JsonParser) =
   var pos = my.bufpos
   var buf = my.buf
-  if buf[pos] == '-': 
+  if buf[pos] == '-':
     add(my.a, '-')
     inc(pos)
-  if buf[pos] == '.': 
+  if buf[pos] == '.':
     add(my.a, "0.")
     inc(pos)
   else:
@@ -350,7 +370,7 @@ proc parseNumber(my: var JsonParser) =
       inc(pos)
   my.bufpos = pos
 
-proc parseName(my: var JsonParser) = 
+proc parseName(my: var JsonParser) =
   var pos = my.bufpos
   var buf = my.buf
   if buf[pos] in IdentStartChars:
@@ -359,11 +379,11 @@ proc parseName(my: var JsonParser) =
       inc(pos)
   my.bufpos = pos
 
-proc getTok(my: var JsonParser): TTokKind = 
+proc getTok(my: var JsonParser): TokKind =
   setLen(my.a, 0)
   skip(my) # skip whitespace, comments
   case my.buf[my.bufpos]
-  of '-', '.', '0'..'9': 
+  of '-', '.', '0'..'9':
     parseNumber(my)
     if {'.', 'e', 'E'} in my.a:
       result = tkFloat
@@ -393,17 +413,17 @@ proc getTok(my: var JsonParser): TTokKind =
     result = tkEof
   of 'a'..'z', 'A'..'Z', '_':
     parseName(my)
-    case my.a 
+    case my.a
     of "null": result = tkNull
     of "true": result = tkTrue
     of "false": result = tkFalse
     else: result = tkError
-  else: 
+  else:
     inc(my.bufpos)
     result = tkError
   my.tok = result
 
-proc next*(my: var JsonParser) = 
+proc next*(my: var JsonParser) =
   ## retrieves the first/next event. This controls the parser.
   var tk = getTok(my)
   var i = my.state.len-1
@@ -416,13 +436,13 @@ proc next*(my: var JsonParser) =
     else:
       my.kind = jsonError
       my.err = errEofExpected
-  of stateStart: 
-    # tokens allowed? 
+  of stateStart:
+    # tokens allowed?
     case tk
     of tkString, tkInt, tkFloat, tkTrue, tkFalse, tkNull:
       my.state[i] = stateEof # expect EOF next!
       my.kind = JsonEventKind(ord(tk))
-    of tkBracketLe: 
+    of tkBracketLe:
       my.state.add(stateArray) # we expect any
       my.kind = jsonArrayStart
     of tkCurlyLe:
@@ -433,12 +453,12 @@ proc next*(my: var JsonParser) =
     else:
       my.kind = jsonError
       my.err = errEofExpected
-  of stateObject: 
+  of stateObject:
     case tk
     of tkString, tkInt, tkFloat, tkTrue, tkFalse, tkNull:
       my.state.add(stateExpectColon)
       my.kind = JsonEventKind(ord(tk))
-    of tkBracketLe: 
+    of tkBracketLe:
       my.state.add(stateExpectColon)
       my.state.add(stateArray)
       my.kind = jsonArrayStart
@@ -457,7 +477,7 @@ proc next*(my: var JsonParser) =
     of tkString, tkInt, tkFloat, tkTrue, tkFalse, tkNull:
       my.state.add(stateExpectArrayComma) # expect value next!
       my.kind = JsonEventKind(ord(tk))
-    of tkBracketLe: 
+    of tkBracketLe:
       my.state.add(stateExpectArrayComma)
       my.state.add(stateArray)
       my.kind = jsonArrayStart
@@ -472,8 +492,8 @@ proc next*(my: var JsonParser) =
       my.kind = jsonError
       my.err = errBracketRiExpected
   of stateExpectArrayComma:
-    case tk 
-    of tkComma: 
+    case tk
+    of tkComma:
       discard my.state.pop()
       next(my)
     of tkBracketRi:
@@ -484,8 +504,8 @@ proc next*(my: var JsonParser) =
       my.kind = jsonError
       my.err = errBracketRiExpected
   of stateExpectObjectComma:
-    case tk 
-    of tkComma: 
+    case tk
+    of tkComma:
       discard my.state.pop()
       next(my)
     of tkCurlyRi:
@@ -495,9 +515,9 @@ proc next*(my: var JsonParser) =
     else:
       my.kind = jsonError
       my.err = errCurlyRiExpected
-  of stateExpectColon: 
-    case tk 
-    of tkColon: 
+  of stateExpectColon:
+    case tk
+    of tkColon:
       my.state[i] = stateExpectValue
       next(my)
     else:
@@ -508,7 +528,7 @@ proc next*(my: var JsonParser) =
     of tkString, tkInt, tkFloat, tkTrue, tkFalse, tkNull:
       my.state[i] = stateExpectObjectComma
       my.kind = JsonEventKind(ord(tk))
-    of tkBracketLe: 
+    of tkBracketLe:
       my.state[i] = stateExpectObjectComma
       my.state.add(stateArray)
       my.kind = jsonArrayStart
@@ -532,8 +552,8 @@ type
     JString,
     JObject,
     JArray
-    
-  JsonNode* = ref JsonNodeObj ## JSON node 
+
+  JsonNode* = ref JsonNodeObj ## JSON node
   JsonNodeObj* {.acyclic.} = object
     case kind*: JsonNodeKind
     of JString:
@@ -605,6 +625,52 @@ proc newJArray*(): JsonNode =
   result.kind = JArray
   result.elems = @[]
 
+proc getStr*(n: JsonNode, default: string = ""): string =
+  ## Retrieves the string value of a `JString JsonNode`.
+  ##
+  ## Returns ``default`` if ``n`` is not a ``JString``, or if ``n`` is nil.
+  if n.isNil or n.kind != JString: return default
+  else: return n.str
+
+proc getNum*(n: JsonNode, default: BiggestInt = 0): BiggestInt =
+  ## Retrieves the int value of a `JInt JsonNode`.
+  ##
+  ## Returns ``default`` if ``n`` is not a ``JInt``, or if ``n`` is nil.
+  if n.isNil or n.kind != JInt: return default
+  else: return n.num
+
+proc getFNum*(n: JsonNode, default: float = 0.0): float =
+  ## Retrieves the float value of a `JFloat JsonNode`.
+  ##
+  ## Returns ``default`` if ``n`` is not a ``JFloat`` or ``JInt``, or if ``n`` is nil.
+  if n.isNil: return default
+  case n.kind
+  of JFloat: return n.fnum
+  of JInt: return float(n.num)
+  else: return default
+
+proc getBVal*(n: JsonNode, default: bool = false): bool =
+  ## Retrieves the bool value of a `JBool JsonNode`.
+  ##
+  ## Returns ``default`` if ``n`` is not a ``JBool``, or if ``n`` is nil.
+  if n.isNil or n.kind != JBool: return default
+  else: return n.bval
+
+proc getFields*(n: JsonNode,
+    default: seq[tuple[key: string, val: JsonNode]] = @[]):
+        seq[tuple[key: string, val: JsonNode]] =
+  ## Retrieves the key, value pairs of a `JObject JsonNode`.
+  ##
+  ## Returns ``default`` if ``n`` is not a ``JObject``, or if ``n`` is nil.
+  if n.isNil or n.kind != JObject: return default
+  else: return n.fields
+
+proc getElems*(n: JsonNode, default: seq[JsonNode] = @[]): seq[JsonNode] =
+  ## Retrieves the int value of a `JArray JsonNode`.
+  ##
+  ## Returns ``default`` if ``n`` is not a ``JArray``, or if ``n`` is nil.
+  if n.isNil or n.kind != JArray: return default
+  else: return n.elems
 
 proc `%`*(s: string): JsonNode =
   ## Generic constructor for JSON data. Creates a new `JString JsonNode`.
@@ -644,7 +710,7 @@ proc `%`*(elements: openArray[JsonNode]): JsonNode =
   newSeq(result.elems, elements.len)
   for i, p in pairs(elements): result.elems[i] = p
 
-proc toJson(x: PNimrodNode): PNimrodNode {.compiletime.} =
+proc toJson(x: NimNode): NimNode {.compiletime.} =
   case x.kind
   of nnkBracket:
     result = newNimNode(nnkBracket)
@@ -672,7 +738,7 @@ proc `==`* (a,b: JsonNode): bool =
   if a.isNil:
     if b.isNil: return true
     return false
-  elif b.isNil or a.kind != b.kind: 
+  elif b.isNil or a.kind != b.kind:
     return false
   else:
     return case a.kind
@@ -691,7 +757,7 @@ proc `==`* (a,b: JsonNode): bool =
     of JObject:
       a.fields == b.fields
 
-proc hash* (n:JsonNode): THash =
+proc hash* (n:JsonNode): Hash =
   ## Compute the hash for a JSON node
   case n.kind
   of JArray:
@@ -709,7 +775,7 @@ proc hash* (n:JsonNode): THash =
   of JNull:
     result = hash(0)
 
-proc len*(n: JsonNode): int = 
+proc len*(n: JsonNode): int =
   ## If `n` is a `JArray`, it returns the number of elements.
   ## If `n` is a `JObject`, it returns the number of pairs.
   ## Else it returns 0.
@@ -718,7 +784,7 @@ proc len*(n: JsonNode): int =
   of JObject: result = n.fields.len
   else: discard
 
-proc `[]`*(node: JsonNode, name: string): JsonNode =
+proc `[]`*(node: JsonNode, name: string): JsonNode {.inline.} =
   ## Gets a field from a `JObject`, which must not be nil.
   ## If the value at `name` does not exist, returns nil
   assert(not isNil(node))
@@ -727,8 +793,8 @@ proc `[]`*(node: JsonNode, name: string): JsonNode =
     if key == name:
       return item
   return nil
-  
-proc `[]`*(node: JsonNode, index: int): JsonNode =
+
+proc `[]`*(node: JsonNode, index: int): JsonNode {.inline.} =
   ## Gets the node at `index` in an Array. Result is undefined if `index`
   ## is out of bounds
   assert(not isNil(node))
@@ -744,43 +810,46 @@ proc hasKey*(node: JsonNode, key: string): bool =
 proc existsKey*(node: JsonNode, key: string): bool {.deprecated.} = node.hasKey(key)
   ## Deprecated for `hasKey`
 
-proc add*(father, child: JsonNode) = 
-  ## Adds `child` to a JArray node `father`. 
+proc add*(father, child: JsonNode) =
+  ## Adds `child` to a JArray node `father`.
   assert father.kind == JArray
   father.elems.add(child)
 
-proc add*(obj: JsonNode, key: string, val: JsonNode) = 
+proc add*(obj: JsonNode, key: string, val: JsonNode) =
   ## Adds ``(key, val)`` pair to the JObject node `obj`. For speed
   ## reasons no check for duplicate keys is performed!
   ## But ``[]=`` performs the check.
   assert obj.kind == JObject
   obj.fields.add((key, val))
 
-proc `[]=`*(obj: JsonNode, key: string, val: JsonNode) =
+proc `[]=`*(obj: JsonNode, key: string, val: JsonNode) {.inline.} =
   ## Sets a field from a `JObject`. Performs a check for duplicate keys.
   assert(obj.kind == JObject)
   for i in 0..obj.fields.len-1:
-    if obj.fields[i].key == key: 
+    if obj.fields[i].key == key:
       obj.fields[i].val = val
       return
   obj.fields.add((key, val))
 
-proc `{}`*(node: JsonNode, key: string): JsonNode =
-  ## Transverses the node and gets the given value. If any of the
-  ## names does not exist, returns nil
+proc `{}`*(node: JsonNode, keys: varargs[string]): JsonNode =
+  ## Traverses the node and gets the given value. If any of the
+  ## keys do not exist, returns nil. Also returns nil if one of the
+  ## intermediate data structures is not an object
   result = node
-  if isNil(node): return nil
-  result = result[key]
+  for key in keys:
+    if isNil(result) or result.kind!=JObject:
+      return nil
+    result=result[key]
 
-proc `{}=`*(node: JsonNode, names: varargs[string], value: JsonNode) =
-  ## Transverses the node and tries to set the value at the given location
-  ## to `value` If any of the names are missing, they are added
+proc `{}=`*(node: JsonNode, keys: varargs[string], value: JsonNode) =
+  ## Traverses the node and tries to set the value at the given location
+  ## to `value` If any of the keys are missing, they are added
   var node = node
-  for i in 0..(names.len-2):
-    if isNil(node[names[i]]):
-      node[names[i]] = newJObject()
-    node = node[names[i]]
-  node[names[names.len-1]] = value
+  for i in 0..(keys.len-2):
+    if isNil(node[keys[i]]):
+      node[keys[i]] = newJObject()
+    node = node[keys[i]]
+  node[keys[keys.len-1]] = value
 
 proc delete*(obj: JsonNode, key: string) =
   ## Deletes ``obj[key]`` preserving the order of the other (key, value)-pairs.
@@ -815,17 +884,17 @@ proc copy*(p: JsonNode): JsonNode =
 
 # ------------- pretty printing ----------------------------------------------
 
-proc indent(s: var string, i: int) = 
+proc indent(s: var string, i: int) =
   s.add(spaces(i))
 
 proc newIndent(curr, indent: int, ml: bool): int =
   if ml: return curr + indent
   else: return indent
 
-proc nl(s: var string, ml: bool) = 
+proc nl(s: var string, ml: bool) =
   if ml: s.add("\n")
 
-proc escapeJson*(s: string): string = 
+proc escapeJson*(s: string): string =
   ## Converts a string `s` to its JSON representation.
   result = newStringOfCap(s.len + s.len shr 3)
   result.add("\"")
@@ -842,13 +911,13 @@ proc escapeJson*(s: string): string =
       result.add(toHex(r, 4))
   result.add("\"")
 
-proc toPretty(result: var string, node: JsonNode, indent = 2, ml = true, 
+proc toPretty(result: var string, node: JsonNode, indent = 2, ml = true,
               lstArr = false, currIndent = 0) =
   case node.kind
   of JObject:
     if currIndent != 0 and not lstArr: result.nl(ml)
     result.indent(currIndent) # Indentation
-    if node.fields.len > 0:  
+    if node.fields.len > 0:
       result.add("{")
       result.nl(ml) # New line
       for i in 0..len(node.fields)-1:
@@ -856,17 +925,17 @@ proc toPretty(result: var string, node: JsonNode, indent = 2, ml = true,
           result.add(", ")
           result.nl(ml) # New Line
         # Need to indent more than {
-        result.indent(newIndent(currIndent, indent, ml)) 
+        result.indent(newIndent(currIndent, indent, ml))
         result.add(escapeJson(node.fields[i].key))
         result.add(": ")
-        toPretty(result, node.fields[i].val, indent, ml, false, 
+        toPretty(result, node.fields[i].val, indent, ml, false,
                  newIndent(currIndent, indent, ml))
       result.nl(ml)
       result.indent(currIndent) # indent the same as {
       result.add("}")
     else:
       result.add("{}")
-  of JString: 
+  of JString:
     if lstArr: result.indent(currIndent)
     result.add(escapeJson(node.str))
   of JInt:
@@ -903,10 +972,46 @@ proc pretty*(node: JsonNode, indent = 2): string =
   result = ""
   toPretty(result, node, indent)
 
+proc toUgly*(result: var string, node: JsonNode) =
+  ## Converts `node` to its JSON Representation, without
+  ## regard for human readability. Meant to improve ``$`` string
+  ## conversion performance.
+  ##
+  ## This provides higher efficiency than the ``toPretty`` procedure as it
+  ## does **not** attempt to format the resulting JSON to make it human readable.
+  var comma = false
+  case node.kind:
+  of JArray:
+    result.add "["
+    for child in node.elems:
+      if comma: result.add ","
+      else:     comma = true
+      result.toUgly child
+    result.add "]"
+  of JObject:
+    result.add "{"
+    for key, value in items(node.fields):
+      if comma: result.add ","
+      else:     comma = true
+      result.add key.escapeJson()
+      result.add ":"
+      result.toUgly value
+    result.add "}"
+  of JString:
+    result.add node.str.escapeJson()
+  of JInt:
+    result.add($node.num)
+  of JFloat:
+    result.add($node.fnum)
+  of JBool:
+    result.add(if node.bval: "true" else: "false")
+  of JNull:
+    result.add "null"
+
 proc `$`*(node: JsonNode): string =
   ## Converts `node` to its JSON Representation on one line.
-  result = ""
-  toPretty(result, node, 0, false)
+  result = newStringOfCap(node.len shl 1)
+  toUgly(result, node)
 
 iterator items*(node: JsonNode): JsonNode =
   ## Iterator for the items of `node`. `node` has to be a JArray.
@@ -934,11 +1039,11 @@ iterator mpairs*(node: var JsonNode): var tuple[key: string, val: JsonNode] =
   for keyVal in mitems(node.fields):
     yield keyVal
 
-proc eat(p: var JsonParser, tok: TTokKind) = 
+proc eat(p: var JsonParser, tok: TokKind) =
   if p.tok == tok: discard getTok(p)
   else: raiseParseErr(p, tokToStr[tok])
 
-proc parseJson(p: var JsonParser): JsonNode = 
+proc parseJson(p: var JsonParser): JsonNode =
   ## Parses JSON from a JSON Parser `p`.
   case p.tok
   of tkString:
@@ -955,17 +1060,17 @@ proc parseJson(p: var JsonParser): JsonNode =
   of tkTrue:
     result = newJBool(true)
     discard getTok(p)
-  of tkFalse: 
+  of tkFalse:
     result = newJBool(false)
     discard getTok(p)
-  of tkNull: 
+  of tkNull:
     result = newJNull()
     discard getTok(p)
-  of tkCurlyLe: 
+  of tkCurlyLe:
     result = newJObject()
     discard getTok(p)
-    while p.tok != tkCurlyRi: 
-      if p.tok != tkString: 
+    while p.tok != tkCurlyRi:
+      if p.tok != tkString:
         raiseParseErr(p, "string literal as key expected")
       var key = p.a
       discard getTok(p)
@@ -978,7 +1083,7 @@ proc parseJson(p: var JsonParser): JsonNode =
   of tkBracketLe:
     result = newJArray()
     discard getTok(p)
-    while p.tok != tkBracketRi: 
+    while p.tok != tkBracketRi:
       result.add(parseJson(p))
       if p.tok != tkComma: break
       discard getTok(p)
@@ -992,9 +1097,9 @@ when not defined(js):
     ## for nice error messages.
     var p: JsonParser
     p.open(s, filename)
+    defer: p.close()
     discard getTok(p) # read first token
     result = p.parseJson()
-    p.close()
 
   proc parseJson*(buffer: string): JsonNode =
     ## Parses JSON from `buffer`.
@@ -1009,8 +1114,10 @@ when not defined(js):
 else:
   from math import `mod`
   type
-    TJSObject = object
-  proc parseNativeJson(x: cstring): TJSObject {.importc: "JSON.parse".}
+    JSObject = object
+  {.deprecated: [TJSObject: JSObject].}
+
+  proc parseNativeJson(x: cstring): JSObject {.importc: "JSON.parse".}
 
   proc getVarType(x): JsonNodeKind =
     result = JNull
@@ -1029,25 +1136,25 @@ else:
     of "[object String]": return JString
     else: assert false
 
-  proc len(x: TJSObject): int =
+  proc len(x: JSObject): int =
     assert x.getVarType == JArray
     asm """
       return `x`.length;
     """
 
-  proc `[]`(x: TJSObject, y: string): TJSObject =
+  proc `[]`(x: JSObject, y: string): JSObject =
     assert x.getVarType == JObject
     asm """
       return `x`[`y`];
     """
 
-  proc `[]`(x: TJSObject, y: int): TJSObject =
+  proc `[]`(x: JSObject, y: int): JSObject =
     assert x.getVarType == JArray
     asm """
       return `x`[`y`];
     """
 
-  proc convertObject(x: TJSObject): JsonNode =
+  proc convertObject(x: JSObject): JsonNode =
     case getVarType(x)
     of JArray:
       result = newJArray()
@@ -1059,7 +1166,7 @@ else:
         if (`x`.hasOwnProperty(property)) {
       """
       var nimProperty: cstring
-      var nimValue: TJSObject
+      var nimValue: JSObject
       asm "`nimProperty` = property; `nimValue` = `x`[property];"
       result[$nimProperty] = nimValue.convertObject()
       asm "}}"
@@ -1098,34 +1205,46 @@ when false:
     of jsonObjectEnd: echo("}")
     of jsonArrayStart: echo("[")
     of jsonArrayEnd: echo("]")
-    
+
   close(x)
 
-# { "json": 5 } 
+# { "json": 5 }
 # To get that we shall use, obj["json"]
 
 when isMainModule:
-  #var node = parse("{ \"test\": null }")
-  #echo(node.existsKey("test56"))
   var parsed = parseFile("tests/testdata/jsontest.json")
   var parsed2 = parseFile("tests/testdata/jsontest2.json")
-  echo(parsed)
-  echo()
-  echo(pretty(parsed, 2))
-  echo()
-  echo(parsed["keyÄÖöoßß"])
-  echo()
-  echo(pretty(parsed2))
-  try:
-    echo(parsed["key2"][12123])
-    raise newException(ValueError, "That line was expected to fail")
-  except IndexError: echo()
 
-  let testJson = parseJson"""{ "a": [1, 2, 3, 4], "b": "asd" }"""
+  try:
+    discard parsed["key2"][12123]
+    assert(false)
+  except IndexError: assert(true)
+
+  let testJson = parseJson"""{ "a": [1, 2, 3, 4], "b": "asd", "c": "\ud83c\udf83", "d": "\u00E6"}"""
   # nil passthrough
   assert(testJson{"doesnt_exist"}{"anything"}.isNil)
-  testJson{["c", "d"]} = %true
-  assert(testJson["c"]["d"].bval)
+  testJson{["e", "f"]} = %true
+  assert(testJson["e"]["f"].bval)
+
+  # make sure UTF-16 decoding works.
+  assert(testJson["c"].str == "🎃")
+  assert(testJson["d"].str == "æ")
+
+  # make sure no memory leek when parsing invalid string
+  let startMemory = getOccupiedMem()
+  for i in 0 .. 10000:
+    try:
+      discard parseJson"""{ invalid"""
+    except:
+      discard
+  # memory diff should less than 2M
+  assert(abs(getOccupiedMem() - startMemory) < 2 * 1024 * 1024)
+
+
+  # test `$`
+  let stringified = $testJson
+  let parsedAgain = parseJson(stringified)
+  assert(parsedAgain["b"].str == "asd")
 
   # Bounds checking
   try:
@@ -1142,6 +1261,14 @@ when isMainModule:
     assert(testJson["a"][0].num == 1, "Index doesn't correspond to its value")
   except:
     assert(false, "EInvalidIndex thrown for valid index")
+
+  assert(testJson{"b"}.str=="asd", "Couldn't fetch a singly nested key with {}")
+  assert(isNil(testJson{"nonexistent"}), "Non-existent keys should return nil")
+  assert(parsed2{"repository", "description"}.str=="IRC Library for Haskell", "Couldn't fetch via multiply nested key using {}")
+  assert(isNil(testJson{"a", "b"}), "Indexing through a list should return nil")
+  assert(isNil(testJson{"a", "b"}), "Indexing through a list should return nil")
+  assert(testJson{"a"}==parseJson"[1, 2, 3, 4]", "Didn't return a non-JObject when there was one to be found")
+  assert(isNil(parseJson("[1, 2, 3]"){"foo"}), "Indexing directly into a list should return nil")
 
   # Generator:
   var j = %* [{"name": "John", "age": 30}, {"name": "Susan", "age": 31}]
@@ -1173,12 +1300,3 @@ when isMainModule:
       }
     ]
   assert j3 == %[%{"name": %"John", "age": %30}, %{"name": %"Susan", "age": %31}]
-
-  discard """
-  while true:
-    var json = stdin.readLine()
-    var node = parse(json)
-    echo(node)
-    echo()
-    echo()
-  """

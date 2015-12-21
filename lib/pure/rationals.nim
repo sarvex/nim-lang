@@ -12,13 +12,15 @@
 ## a denominator `den`, both of type int. The denominator can not be 0.
 
 import math
+import hashes
 
 type Rational*[T] = object
   ## a rational number, consisting of a numerator and denominator
   num*, den*: T
 
-proc initRational*[T](num, den: T): Rational[T] =
+proc initRational*[T:SomeInteger](num, den: T): Rational[T] =
   ## Create a new rational number.
+  assert(den != 0, "a denominator of zero value is invalid")
   result.num = num
   result.den = den
 
@@ -32,10 +34,67 @@ proc `$`*[T](x: Rational[T]): string =
   ## Turn a rational number into a string.
   result = $x.num & "/" & $x.den
 
-proc toRational*[T](x: SomeInteger): Rational[T] =
+proc toRational*[T:SomeInteger](x: T): Rational[T] =
   ## Convert some integer `x` to a rational number.
   result.num = x
   result.den = 1
+
+proc toRationalSub(x: float, n: int): Rational[int] =
+  var
+    a = 0
+    b, c, d = 1
+  result = 0 // 1   # rational 0
+  while b <= n and d <= n:
+    let ac = (a+c)
+    let bd = (b+d)
+    # scale by 1000 so not overflow for high precision
+    let mediant = (ac/1000) / (bd/1000)
+    if x == mediant:
+      if bd <= n:
+        result.num = ac
+        result.den = bd
+        return result
+      elif d > b:
+        result.num = c
+        result.den = d
+        return result
+      else:
+        result.num = a
+        result.den = b
+        return result
+    elif x > mediant:
+      a = ac
+      b = bd
+    else:
+      c = ac
+      d = bd
+  if (b > n):
+    return initRational(c, d)
+  return initRational(a, b)
+
+proc toRational*(x: float, n: int = high(int)): Rational[int] =
+  ## Calculate the best rational numerator and denominator
+  ## that approximates to `x`, where the denominator is
+  ## smaller than `n` (default is the largest possible
+  ## int to give maximum resolution)
+  ##
+  ## The algorithm is based on the Farey sequence named
+  ## after John Farey
+  ##
+  ## .. code-block:: Nim
+  ##  import math, rationals
+  ##  for i in 1..10:
+  ##    let t = (10 ^ (i+3)).int
+  ##    let x = toRational(PI, t)
+  ##    let newPI = x.num / x.den
+  ##    echo x, " ", newPI, " error: ", PI - newPI, "  ", t
+  if x > 1:
+    result = toRationalSub(1.0/x, n)
+    swap(result.num, result.den)
+  elif x == 1.0:
+    result = 1 // 1
+  else:
+    result = toRationalSub(x, n)
 
 proc toFloat*[T](x: Rational[T]): float =
   ## Convert a rational number `x` to a float.
@@ -46,7 +105,7 @@ proc toInt*[T](x: Rational[T]): int =
   ## `x` does not contain an integer value.
   x.num div x.den
 
-proc reduce*[T](x: var Rational[T]) =
+proc reduce*[T:SomeInteger](x: var Rational[T]) =
   ## Reduce rational `x`.
   let common = gcd(x.num, x.den)
   if x.den > 0:
@@ -188,7 +247,7 @@ proc `/=`*[T](x: var Rational[T], y: T) =
   x.den *= y
   reduce(x)
 
-proc cmp*(x, y: Rational): int =
+proc cmp*(x, y: Rational): int {.procvar.} =
   ## Compares two rationals.
   (x - y).num
 
@@ -204,6 +263,17 @@ proc `==` *(x, y: Rational): bool =
 proc abs*[T](x: Rational[T]): Rational[T] =
   result.num = abs x.num
   result.den = abs x.den
+
+proc hash*[T](x: Rational[T]): Hash =
+  ## Computes hash for rational `x`
+  # reduce first so that hash(x) == hash(y) for x == y
+  var copy = x
+  reduce(copy)
+
+  var h: Hash = 0
+  h = h !& hash(copy.num)
+  h = h !& hash(copy.den)
+  result = !$h
 
 when isMainModule:
   var
@@ -242,11 +312,13 @@ when isMainModule:
   assert( not(o > o) )
   assert( cmp(o, o) == 0 )
   assert( cmp(z, z) == 0 )
+  assert( hash(o) == hash(o) )
 
   assert( a == b )
   assert( a >= b )
   assert( not(b > a) )
   assert( cmp(a, b) == 0 )
+  assert( hash(a) == hash(b) )
 
   var x = 1//3
 
@@ -270,6 +342,11 @@ when isMainModule:
   y /= 9
   assert( y == 13//27 )
 
-  assert toRational[int, int](5) == 5//1
+  assert toRational(5) == 5//1
   assert abs(toFloat(y) - 0.4814814814814815) < 1.0e-7
   assert toInt(z) == 0
+
+  assert toRational(0.98765432) == 12345679 // 12500000
+  assert toRational(0.1, 1000000) == 1 // 10
+  assert toRational(0.9, 1000000) == 9 // 10
+  assert toRational(PI) == 80143857 // 25510582

@@ -14,7 +14,7 @@ type
   Url* = distinct string
 
   Uri* = object
-    scheme*, username*, password*: string 
+    scheme*, username*, password*: string
     hostname*, port*, path*, query*, anchor*: string
     opaque*: bool
 
@@ -53,10 +53,10 @@ proc parseAuthority(authority: string, result: var Uri) =
   while true:
     case authority[i]
     of '@':
-      result.password = result.port
-      result.port = ""
-      result.username = result.hostname
-      result.hostname = ""
+      swap result.password, result.port
+      result.port.setLen(0)
+      swap result.username, result.hostname
+      result.hostname.setLen(0)
       inPort = false
     of ':':
       inPort = true
@@ -69,13 +69,13 @@ proc parseAuthority(authority: string, result: var Uri) =
     i.inc
 
 proc parsePath(uri: string, i: var int, result: var Uri) =
-  
+
   i.inc parseUntil(uri, result.path, {'?', '#'}, i)
 
   # The 'mailto' scheme's PATH actually contains the hostname/username
   if result.scheme.toLower == "mailto":
     parseAuthority(result.path, result)
-    result.path = ""
+    result.path.setLen(0)
 
   if uri[i] == '?':
     i.inc # Skip '?'
@@ -85,30 +85,42 @@ proc parsePath(uri: string, i: var int, result: var Uri) =
     i.inc # Skip '#'
     i.inc parseUntil(uri, result.anchor, {}, i)
 
-proc initUri(): Uri =
+proc initUri*(): Uri =
+  ## Initializes a URI.
   result = Uri(scheme: "", username: "", password: "", hostname: "", port: "",
                 path: "", query: "", anchor: "")
 
-proc parseUri*(uri: string): Uri =
-  ## Parses a URI.
-  result = initUri()
+proc resetUri(uri: var Uri) =
+  for f in uri.fields:
+    when f is string:
+      f.setLen(0)
+    else:
+      f = false
+
+proc parseUri*(uri: string, result: var Uri) =
+  ## Parses a URI. The `result` variable will be cleared before.
+  resetUri(result)
 
   var i = 0
 
   # Check if this is a reference URI (relative URI)
+  let doubleSlash = uri.len > 1 and uri[1] == '/'
   if uri[i] == '/':
-    parsePath(uri, i, result)
-    return
+    # Make sure ``uri`` doesn't begin with '//'.
+    if not doubleSlash:
+      parsePath(uri, i, result)
+      return
 
   # Scheme
   i.inc parseWhile(uri, result.scheme, Letters + Digits + {'+', '-', '.'}, i)
-  if uri[i] != ':':
+  if uri[i] != ':' and not doubleSlash:
     # Assume this is a reference URI (relative URI)
     i = 0
-    result.scheme = ""
+    result.scheme.setLen(0)
     parsePath(uri, i, result)
     return
-  i.inc # Skip ':'
+  if not doubleSlash:
+    i.inc # Skip ':'
 
   # Authority
   if uri[i] == '/' and uri[i+1] == '/':
@@ -124,7 +136,13 @@ proc parseUri*(uri: string): Uri =
   # Path
   parsePath(uri, i, result)
 
+proc parseUri*(uri: string): Uri =
+  ## Parses a URI and returns it.
+  result = initUri()
+  parseUri(uri, result)
+
 proc removeDotSegments(path: string): string =
+  if path.len == 0: return ""
   var collection: seq[string] = @[]
   let endsWithSlash = path[path.len-1] == '/'
   var i = 0
@@ -188,7 +206,7 @@ proc combine*(base: Uri, reference: Uri): Uri =
   ##
   ##   let bar = combine(parseUri("http://example.com/foo/bar/"), parseUri("baz"))
   ##   assert bar.path == "/foo/bar/baz"
-  
+
   template setAuthority(dest, src: expr): stmt =
     dest.hostname = src.hostname
     dest.username = src.username
@@ -356,6 +374,15 @@ when isMainModule:
     doAssert test.path == "test/no/slash"
     doAssert($test == str)
 
+  block:
+    let str = "//git@github.com:dom96/packages"
+    let test = parseUri(str)
+    doAssert test.scheme == ""
+    doAssert test.username == "git"
+    doAssert test.hostname == "github.com"
+    doAssert test.port == "dom96"
+    doAssert test.path == "/packages"
+
   # Remove dot segments tests
   block:
     doAssert removeDotSegments("/foo/bar/baz") == "/foo/bar/baz"
@@ -406,3 +433,12 @@ when isMainModule:
   block:
     let test = parseUri("http://example.com/foo/") / "/bar/asd"
     doAssert test.path == "/foo/bar/asd"
+
+  # removeDotSegments tests
+  block:
+    # empty test
+    doAssert removeDotSegments("") == ""
+
+  # bug #3207
+  block:
+    doAssert parseUri("http://qq/1").combine(parseUri("https://qqq")).`$` == "https://qqq"

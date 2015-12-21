@@ -16,7 +16,7 @@ const
   byteExcess* = 128 # we use excess-K for immediates
   wordExcess* = 32768
 
-  MaxLoopIterations* = 500_000 # max iterations of all loops
+  MaxLoopIterations* = 1500_000 # max iterations of all loops
 
 
 type
@@ -29,7 +29,7 @@ type
     opcRet,         # return
     opcYldYoid,     # yield with no value
     opcYldVal,      # yield with a value
-    
+
     opcAsgnInt,
     opcAsgnStr,
     opcAsgnFloat,
@@ -48,8 +48,8 @@ type
     opcWrDeref,
     opcWrStrIdx,
     opcLdStrIdx, # a = b[c]
-    
-    opcAddInt, 
+
+    opcAddInt,
     opcAddImmInt,
     opcSubInt,
     opcSubImmInt,
@@ -58,36 +58,38 @@ type
 
     opcIncl, opcInclRange, opcExcl, opcCard, opcMulInt, opcDivInt, opcModInt,
     opcAddFloat, opcSubFloat, opcMulFloat, opcDivFloat, opcShrInt, opcShlInt,
-    opcBitandInt, opcBitorInt, opcBitxorInt, opcAddu, opcSubu, opcMulu, 
-    opcDivu, opcModu, opcEqInt, opcLeInt, opcLtInt, opcEqFloat, 
-    opcLeFloat, opcLtFloat, opcLeu, opcLtu, opcEqRef, opcEqNimrodNode, opcXor, 
-    opcNot, opcUnaryMinusInt, opcUnaryMinusFloat, opcBitnotInt, 
+    opcBitandInt, opcBitorInt, opcBitxorInt, opcAddu, opcSubu, opcMulu,
+    opcDivu, opcModu, opcEqInt, opcLeInt, opcLtInt, opcEqFloat,
+    opcLeFloat, opcLtFloat, opcLeu, opcLtu,
+    opcEqRef, opcEqNimrodNode, opcSameNodeType,
+    opcXor, opcNot, opcUnaryMinusInt, opcUnaryMinusFloat, opcBitnotInt,
     opcEqStr, opcLeStr, opcLtStr, opcEqSet, opcLeSet, opcLtSet,
     opcMulSet, opcPlusSet, opcMinusSet, opcSymdiffSet, opcConcatStr,
     opcContainsSet, opcRepr, opcSetLenStr, opcSetLenSeq,
-    opcSwap, opcIsNil, opcOf, opcIs,
-    opcSubStr, opcParseFloat, opcConv, opcCast, opcQuit, opcReset,
+    opcIsNil, opcOf, opcIs,
+    opcSubStr, opcParseFloat, opcConv, opcCast,
+    opcQuit, opcReset,
     opcNarrowS, opcNarrowU,
-    
+
     opcAddStrCh,
     opcAddStrStr,
     opcAddSeqElem,
     opcRangeChck,
-    
+
     opcNAdd,
     opcNAddMultiple,
-    opcNKind, 
-    opcNIntVal, 
-    opcNFloatVal, 
-    opcNSymbol, 
+    opcNKind,
+    opcNIntVal,
+    opcNFloatVal,
+    opcNSymbol,
     opcNIdent,
     opcNGetType,
     opcNStrVal,
-    
+
     opcNSetIntVal,
     opcNSetFloatVal, opcNSetSymbol, opcNSetIdent, opcNSetType, opcNSetStrVal,
     opcNNewNimNode, opcNCopyNimNode, opcNCopyNimTree, opcNDel, opcGenSym,
-    
+
     opcSlurp,
     opcGorge,
     opcParseExprToAst,
@@ -100,7 +102,8 @@ type
     opcEqIdent,
     opcStrToIdent,
     opcIdentToStr,
-    
+    opcGetImpl,
+
     opcEcho,
     opcIndCall, # dest = call regStart, n; where regStart = fn, arg1, ...
     opcIndCallAsgn, # dest = call regStart, n; where regStart = fn, arg1, ...
@@ -110,7 +113,7 @@ type
     opcNSetChild,
     opcCallSite,
     opcNewStr,
-  
+
     opcTJmp,  # jump Bx if A != 0
     opcFJmp,  # jump Bx if A == 0
     opcJmp,   # jump Bx
@@ -132,7 +135,8 @@ type
     opcLdImmInt,  # dest = immediate value
     opcNBindSym,
     opcSetType,   # dest.typ = types[Bx]
-    opcTypeTrait
+    opcTypeTrait,
+    opcMarshalLoad, opcMarshalStore
 
   TBlock* = object
     label*: PSym
@@ -178,13 +182,13 @@ type
     slots*: pointer
     currentException*: PNode
   VmCallback* = proc (args: VmArgs) {.closure.}
-  
+
   PCtx* = ref TCtx
   TCtx* = object of passes.TPassContext # code gen context
     code*: seq[TInstr]
     debug*: seq[TLineInfo]  # line info for every instruction; kept separate
                             # to not slow down interpretation
-    globals*: PNode         # 
+    globals*: PNode         #
     constants*: PNode       # constant data
     types*: seq[PType]      # some instructions reference types (e.g. 'except')
     currentExceptionA*, currentExceptionB*: PNode
@@ -203,7 +207,7 @@ type
   TPosition* = distinct int
 
   PEvalContext* = PCtx
-  
+
 proc newCtx*(module: PSym): PCtx =
   PCtx(code: @[], debug: @[],
     globals: newNode(nkStmtListExpr), constants: newNode(nkStmtList), types: @[],
@@ -221,7 +225,8 @@ proc registerCallback*(c: PCtx; name: string; callback: VmCallback) =
 const
   firstABxInstr* = opcTJmp
   largeInstrs* = { # instructions which use 2 int32s instead of 1:
-    opcSubStr, opcConv, opcCast, opcNewSeq, opcOf}
+    opcSubStr, opcConv, opcCast, opcNewSeq, opcOf,
+    opcMarshalLoad, opcMarshalStore}
   slotSomeTemp* = slotTempUnknown
   relativeJumps* = {opcTJmp, opcFJmp, opcJmp, opcJmpBack}
 

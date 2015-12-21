@@ -499,7 +499,7 @@ proc newMimetypes*(): MimeDB =
 proc getMimetype*(mimedb: MimeDB, ext: string, default = "text/plain"): string =
   ## Gets mimetype which corresponds to ``ext``. Returns ``default`` if ``ext``
   ## could not be found.
-  result = mimedb.mimes[ext]
+  result = mimedb.mimes.getOrDefault(ext)
   if result == "":
     return default
 
@@ -518,5 +518,5 @@ proc register*(mimedb: var MimeDB, ext: string, mimetype: string) =
 
 when isMainModule:
   var m = newMimetypes()
-  echo m.getMimetype("mp4")
-  echo m.getExt("text/html")
+  assert m.getMimetype("mp4") == "video/mp4"
+  assert m.getExt("text/html") == "html"

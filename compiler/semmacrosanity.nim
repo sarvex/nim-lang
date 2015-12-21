@@ -16,9 +16,9 @@ proc ithField(n: PNode, field: int): PSym =
   result = nil
   case n.kind
   of nkRecList:
-    for i in countup(0, sonsLen(n) - 1): 
+    for i in countup(0, sonsLen(n) - 1):
       result = ithField(n.sons[i], field-i)
-      if result != nil: return 
+      if result != nil: return
   of nkRecCase:
     if n.sons[0].kind != nkSym: internalError(n.info, "ithField")
     result = ithField(n.sons[0], field-1)
@@ -34,18 +34,20 @@ proc ithField(n: PNode, field: int): PSym =
   else: discard
 
 proc annotateType*(n: PNode, t: PType) =
-  let x = t.skipTypes(abstractInst)
+  let x = t.skipTypes(abstractInst+{tyRange})
   # Note: x can be unequal to t and we need to be careful to use 't'
   # to not to skip tyGenericInst
   case n.kind
+  of nkObjConstr:
+    n.typ = t
+    for i in 1 .. <n.len:
+      let field = x.n.ithField(i - 1)
+      if field.isNil: globalError n.info, "invalid field at index " & $i
+      else:
+        internalAssert(n.sons[i].kind == nkExprColonExpr)
+        annotateType(n.sons[i].sons[1], field.typ)
   of nkPar:
-    if x.kind == tyObject:
-      n.typ = t
-      for i in 0 .. <n.len:
-        let field = x.n.ithField(i)
-        if field.isNil: globalError n.info, "invalid field at index " & $i
-        else: annotateType(n.sons[i], field.typ)
-    elif x.kind == tyTuple:
+    if x.kind == tyTuple:
       n.typ = t
       for i in 0 .. <n.len:
         if i >= x.len: globalError n.info, "invalid field at index " & $i
@@ -53,7 +55,7 @@ proc annotateType*(n: PNode, t: PType) =
     elif x.kind == tyProc and x.callConv == ccClosure:
       n.typ = t
     else:
-      globalError(n.info, "() must have an object or tuple type")
+      globalError(n.info, "() must have a tuple type")
   of nkBracket:
     if x.kind in {tyArrayConstr, tyArray, tySequence, tyOpenArray}:
       n.typ = t
@@ -80,7 +82,7 @@ proc annotateType*(n: PNode, t: PType) =
     if x.kind in {tyString, tyCString}:
       n.typ = t
     else:
-      globalError(n.info, "string literal must be of some string type")    
+      globalError(n.info, "string literal must be of some string type")
   of nkNilLit:
     if x.kind in NilableTypes:
       n.typ = t

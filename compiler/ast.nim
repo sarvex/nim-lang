@@ -1,7 +1,7 @@
 #
 #
 #           The Nim Compiler
-#        (c) Copyright 2013 Andreas Rumpf
+#        (c) Copyright 2015 Andreas Rumpf
 #
 #    See the file "copying.txt", included in this
 #    distribution, for details about the copyright.
@@ -10,7 +10,7 @@
 # abstract syntax tree + symbol table
 
 import
-  msgs, hashes, nversion, options, strutils, crc, ropes, idents, lists,
+  msgs, hashes, nversion, options, strutils, securehash, ropes, idents, lists,
   intsets, idgen
 
 type
@@ -257,7 +257,7 @@ type
     sfThread,         # proc will run as a thread
                       # variable is a thread variable
     sfCompileTime,    # proc can be evaluated at compile time
-    sfMerge,          # proc can be merged with itself
+    sfConstructor,    # proc is a C++ constructor
     sfDeadCodeElim,   # dead code elimination for the module is turned on
     sfBorrow,         # proc is borrowed
     sfInfixCall,      # symbol needs infix call syntax in target language;
@@ -291,11 +291,13 @@ const
   sfNoForward* = sfRegister
     # forward declarations are not required (per module)
 
-  sfNoRoot* = sfBorrow # a local variable is provably no root so it doesn't
-                       # require RC ops
   sfCompileToCpp* = sfInfixCall       # compile the module as C++ code
   sfCompileToObjc* = sfNamedParamCall # compile the module as Objective-C code
   sfExperimental* = sfOverriden       # module uses the .experimental switch
+  sfGoto* = sfOverriden               # var is used for 'goto' code generation
+  sfWrittenTo* = sfBorrow             # param is assigned to
+  sfEscapes* = sfProcvar              # param escapes
+  sfBase* = sfDiscriminant
 
 const
   # getting ready for the future expr/stmt merge
@@ -422,6 +424,7 @@ type
                 # but unfortunately it has measurable impact for compilation
                 # efficiency
     nfTransf,   # node has been transformed
+    nfNoRewrite # node should not be transformed anymore
     nfSem       # node has been checked for semantics
     nfLL        # node has gone through lambda lifting
     nfDotField  # the call can use a dot operator
@@ -472,8 +475,10 @@ type
                       # T and I here can bind to both typedesc and static types
                       # before this is determined, we'll consider them to be a
                       # wildcard type.
-    tfGuarded         # guarded pointer
+    tfHasAsgn         # type has overloaded assignment operator
     tfBorrowDot       # distinct type borrows '.'
+    tfTriggersCompileTime # uses the NimNode type which make the proc
+                          # implicitly '.compiletime'
 
   TTypeFlags* = set[TTypeFlag]
 
@@ -520,6 +525,12 @@ const
   tfUnion* = tfNoSideEffect
   tfGcSafe* = tfThread
   tfObjHasKids* = tfEnumHasHoles
+  tfOldSchoolExprStmt* = tfVarargs # for now used to distinguish \
+    # 'varargs[expr]' from 'varargs[untyped]'. Eventually 'expr' will be
+    # deprecated and this mess can be cleaned up.
+  tfVoid* = tfVarargs # for historical reasons we conflated 'void' with
+                      # 'empty' ('@[]' has the type 'seq[empty]').
+  tfReturnsNew* = tfInheritable
   skError* = skUnknown
 
   # type flags that are essential for type equality:
@@ -528,37 +539,52 @@ const
 type
   TMagic* = enum # symbols that require compiler magic:
     mNone,
-    mDefined, mDefinedInScope, mCompiles,
-    mLow, mHigh, mSizeOf, mTypeTrait, mIs, mOf,
+    mDefined, mDefinedInScope, mCompiles, mArrGet, mArrPut, mAsgn,
+    mLow, mHigh, mSizeOf, mTypeTrait, mIs, mOf, mAddr, mTypeOf, mRoof, mPlugin,
     mEcho, mShallowCopy, mSlurp, mStaticExec,
     mParseExprToAst, mParseStmtToAst, mExpandToAst, mQuoteAst,
-    mUnaryLt, mSucc,
-    mPred, mInc, mDec, mOrd, mNew, mNewFinalize, mNewSeq, mLengthOpenArray,
-    mLengthStr, mLengthArray, mLengthSeq, mIncl, mExcl, mCard, mChr, mGCref,
-    mGCunref, mAddI, mSubI, mMulI, mDivI, mModI, mAddI64, mSubI64, mMulI64,
-    mDivI64, mModI64,
+    mUnaryLt, mInc, mDec, mOrd,
+    mNew, mNewFinalize, mNewSeq,
+    mLengthOpenArray, mLengthStr, mLengthArray, mLengthSeq,
+    mXLenStr, mXLenSeq,
+    mIncl, mExcl, mCard, mChr,
+    mGCref, mGCunref,
+    mAddI, mSubI, mMulI, mDivI, mModI,
+    mSucc, mPred,
     mAddF64, mSubF64, mMulF64, mDivF64,
-    mShrI, mShlI, mBitandI, mBitorI, mBitxorI, mMinI, mMaxI,
-    mShrI64, mShlI64, mBitandI64, mBitorI64, mBitxorI64, mMinI64, mMaxI64,
-    mMinF64, mMaxF64, mAddU, mSubU, mMulU,
-    mDivU, mModU, mEqI, mLeI,
-    mLtI,
-    mEqI64, mLeI64, mLtI64, mEqF64, mLeF64, mLtF64,
-    mLeU, mLtU, mLeU64, mLtU64,
-    mEqEnum, mLeEnum, mLtEnum, mEqCh, mLeCh, mLtCh, mEqB, mLeB, mLtB, mEqRef,
-    mEqUntracedRef, mLePtr, mLtPtr, mEqCString, mXor, mEqProc, mUnaryMinusI,
-    mUnaryMinusI64, mAbsI, mAbsI64, mNot,
-    mUnaryPlusI, mBitnotI, mUnaryPlusI64,
-    mBitnotI64, mUnaryPlusF64, mUnaryMinusF64, mAbsF64, mZe8ToI, mZe8ToI64,
-    mZe16ToI, mZe16ToI64, mZe32ToI64, mZeIToI64, mToU8, mToU16, mToU32,
-    mToFloat, mToBiggestFloat, mToInt, mToBiggestInt, mCharToStr, mBoolToStr,
-    mIntToStr, mInt64ToStr, mFloatToStr, mCStrToStr, mStrToStr, mEnumToStr,
-    mAnd, mOr, mEqStr, mLeStr, mLtStr, mEqSet, mLeSet, mLtSet, mMulSet,
-    mPlusSet, mMinusSet, mSymDiffSet, mConStrStr, mConArrArr, mConArrT,
-    mConTArr, mConTT, mSlice,
+    mShrI, mShlI, mBitandI, mBitorI, mBitxorI,
+    mMinI, mMaxI,
+    mMinF64, mMaxF64,
+    mAddU, mSubU, mMulU, mDivU, mModU,
+    mEqI, mLeI, mLtI,
+    mEqF64, mLeF64, mLtF64,
+    mLeU, mLtU,
+    mLeU64, mLtU64,
+    mEqEnum, mLeEnum, mLtEnum,
+    mEqCh, mLeCh, mLtCh,
+    mEqB, mLeB, mLtB,
+    mEqRef, mEqUntracedRef, mLePtr, mLtPtr, mEqCString,
+    mXor, mEqProc,
+    mUnaryMinusI, mUnaryMinusI64, mAbsI, mNot,
+    mUnaryPlusI, mBitnotI,
+    mUnaryPlusF64, mUnaryMinusF64, mAbsF64,
+    mZe8ToI, mZe8ToI64,
+    mZe16ToI, mZe16ToI64,
+    mZe32ToI64, mZeIToI64,
+    mToU8, mToU16, mToU32,
+    mToFloat, mToBiggestFloat,
+    mToInt, mToBiggestInt,
+    mCharToStr, mBoolToStr, mIntToStr, mInt64ToStr, mFloatToStr, mCStrToStr,
+    mStrToStr, mEnumToStr,
+    mAnd, mOr,
+    mEqStr, mLeStr, mLtStr,
+    mEqSet, mLeSet, mLtSet, mMulSet, mPlusSet, mMinusSet, mSymDiffSet,
+    mConStrStr, mSlice,
+    mDotDot, # this one is only necessary to give nice compile time warnings
     mFields, mFieldPairs, mOmpParFor,
     mAppendStrCh, mAppendStrStr, mAppendSeqElem,
-    mInRange, mInSet, mRepr, mExit, mSetLengthStr, mSetLengthSeq,
+    mInRange, mInSet, mRepr, mExit,
+    mSetLengthStr, mSetLengthSeq,
     mIsPartOf, mAstToStr, mParallel,
     mSwap, mIsNil, mArrToSeq, mCopyStr, mCopyStrLast,
     mNewString, mNewStringOfCap, mParseBiggestFloat,
@@ -580,42 +606,53 @@ type
     mNSetFloatVal, mNSetSymbol, mNSetIdent, mNSetType, mNSetStrVal, mNLineInfo,
     mNNewNimNode, mNCopyNimNode, mNCopyNimTree, mStrToIdent, mIdentToStr,
     mNBindSym, mLocals, mNCallSite,
-    mEqIdent, mEqNimrodNode, mNHint, mNWarning, mNError,
-    mInstantiationInfo, mGetTypeInfo, mNGenSym
+    mEqIdent, mEqNimrodNode, mSameNodeType, mGetImpl,
+    mNHint, mNWarning, mNError,
+    mInstantiationInfo, mGetTypeInfo, mNGenSym,
+    mNimvm
 
 # things that we can evaluate safely at compile time, even if not asked for it:
 const
   ctfeWhitelist* = {mNone, mUnaryLt, mSucc,
     mPred, mInc, mDec, mOrd, mLengthOpenArray,
-    mLengthStr, mLengthArray, mLengthSeq, mIncl, mExcl, mCard, mChr,
-    mAddI, mSubI, mMulI, mDivI, mModI, mAddI64, mSubI64, mMulI64,
-    mDivI64, mModI64, mAddF64, mSubF64, mMulF64, mDivF64,
-    mShrI, mShlI, mBitandI, mBitorI, mBitxorI, mMinI, mMaxI,
-    mShrI64, mShlI64, mBitandI64, mBitorI64, mBitxorI64, mMinI64, mMaxI64,
-    mMinF64, mMaxF64, mAddU, mSubU, mMulU,
-    mDivU, mModU, mEqI, mLeI,
-    mLtI,
-    mEqI64, mLeI64, mLtI64, mEqF64, mLeF64, mLtF64,
-    mLeU, mLtU, mLeU64, mLtU64,
-    mEqEnum, mLeEnum, mLtEnum, mEqCh, mLeCh, mLtCh, mEqB, mLeB, mLtB, mEqRef,
-    mEqProc, mEqUntracedRef, mLePtr, mLtPtr, mEqCString, mXor, mUnaryMinusI,
-    mUnaryMinusI64, mAbsI, mAbsI64, mNot,
-    mUnaryPlusI, mBitnotI, mUnaryPlusI64,
-    mBitnotI64, mUnaryPlusF64, mUnaryMinusF64, mAbsF64, mZe8ToI, mZe8ToI64,
-    mZe16ToI, mZe16ToI64, mZe32ToI64, mZeIToI64, mToU8, mToU16, mToU32,
-    mToFloat, mToBiggestFloat, mToInt, mToBiggestInt, mCharToStr, mBoolToStr,
-    mIntToStr, mInt64ToStr, mFloatToStr, mCStrToStr, mStrToStr, mEnumToStr,
-    mAnd, mOr, mEqStr, mLeStr, mLtStr, mEqSet, mLeSet, mLtSet, mMulSet,
-    mPlusSet, mMinusSet, mSymDiffSet, mConStrStr, mConArrArr, mConArrT,
-    mConTArr, mConTT,
-    mAppendStrCh, mAppendStrStr, mAppendSeqElem,
+    mLengthStr, mLengthArray, mLengthSeq, mXLenStr, mXLenSeq,
+    mArrGet, mArrPut, mAsgn,
+    mIncl, mExcl, mCard, mChr,
+    mAddI, mSubI, mMulI, mDivI, mModI,
+    mAddF64, mSubF64, mMulF64, mDivF64,
+    mShrI, mShlI, mBitandI, mBitorI, mBitxorI,
+    mMinI, mMaxI,
+    mMinF64, mMaxF64,
+    mAddU, mSubU, mMulU, mDivU, mModU,
+    mEqI, mLeI, mLtI,
+    mEqF64, mLeF64, mLtF64,
+    mLeU, mLtU,
+    mLeU64, mLtU64,
+    mEqEnum, mLeEnum, mLtEnum,
+    mEqCh, mLeCh, mLtCh,
+    mEqB, mLeB, mLtB,
+    mEqRef, mEqProc, mEqUntracedRef, mLePtr, mLtPtr, mEqCString, mXor,
+    mUnaryMinusI, mUnaryMinusI64, mAbsI, mNot, mUnaryPlusI, mBitnotI,
+    mUnaryPlusF64, mUnaryMinusF64, mAbsF64,
+    mZe8ToI, mZe8ToI64,
+    mZe16ToI, mZe16ToI64,
+    mZe32ToI64, mZeIToI64,
+    mToU8, mToU16, mToU32,
+    mToFloat, mToBiggestFloat,
+    mToInt, mToBiggestInt,
+    mCharToStr, mBoolToStr, mIntToStr, mInt64ToStr, mFloatToStr, mCStrToStr,
+    mStrToStr, mEnumToStr,
+    mAnd, mOr,
+    mEqStr, mLeStr, mLtStr,
+    mEqSet, mLeSet, mLtSet, mMulSet, mPlusSet, mMinusSet, mSymDiffSet,
+    mConStrStr, mAppendStrCh, mAppendStrStr, mAppendSeqElem,
     mInRange, mInSet, mRepr,
     mCopyStr, mCopyStrLast}
   # magics that require special semantic checking and
   # thus cannot be overloaded (also documented in the spec!):
   SpecialSemMagics* = {
     mDefined, mDefinedInScope, mCompiles, mLow, mHigh, mSizeOf, mIs, mOf,
-    mEcho, mShallowCopy, mExpandToAst, mParallel, mSpawn, mAstToStr}
+    mShallowCopy, mExpandToAst, mParallel, mSpawn, mAstToStr}
 
 type
   PNode* = ref TNode
@@ -663,7 +700,9 @@ type
     locOther                  # location is something other
   TLocFlag* = enum
     lfIndirect,               # backend introduced a pointer
-    lfParamCopy,              # backend introduced a parameter copy (LLVM)
+    lfFullExternalName, # only used when 'gCmd == cmdPretty': Indicates
+      # that the symbol has been imported via 'importc: "fullname"' and
+      # no format string.
     lfNoDeepCopy,             # no need for a deep copy
     lfNoDecl,                 # do not declare it in C
     lfDynamicLib,             # link symbol to dynamic library
@@ -673,6 +712,7 @@ type
     lfSingleUse               # no location yet and will only be used once
   TStorageLoc* = enum
     OnUnknown,                # location is unknown (stack, heap or static)
+    OnStatic,                 # in a static section
     OnStack,                  # location is on hardware stack
     OnHeap                    # location is on heap or global
                               # (reference counting needed)
@@ -682,8 +722,8 @@ type
     s*: TStorageLoc
     flags*: TLocFlags         # location's flags
     t*: PType                 # type of location
-    r*: PRope                 # rope value of location (code generators)
-    heapRoot*: PRope          # keeps track of the enclosing heap object that
+    r*: Rope                 # rope value of location (code generators)
+    heapRoot*: Rope          # keeps track of the enclosing heap object that
                               # owns this location (required by GC algorithms
                               # employing heap snapshots or sliding views)
 
@@ -695,9 +735,11 @@ type
     kind*: TLibKind
     generated*: bool          # needed for the backends:
     isOverriden*: bool
-    name*: PRope
+    name*: Rope
     path*: PNode              # can be a string literal!
 
+  CompilesId* = int ## id that is used for the caching logic within
+                    ## ``system.compiles``. See the seminst module.
   TInstantiation* = object
     sym*: PSym
     concreteTypes*: seq[PType]
@@ -705,6 +747,7 @@ type
                               # needed in caas mode for purging the cache
                               # XXX: it's possible to switch to a
                               # simple ref count here
+    compilesId*: CompilesId
 
   PInstantiation* = ref TInstantiation
 
@@ -725,7 +768,8 @@ type
       typScope*: PScope
     of routineKinds:
       procInstCache*: seq[PInstantiation]
-      scope*: PScope          # the scope where the proc was defined
+      gcUnsafetyReason*: PSym  # for better error messages wrt gcsafe
+      #scope*: PScope          # the scope where the proc was defined
     of skModule:
       # modules keep track of the generic symbols they use from other modules.
       # this is because in incremental compilation, when a module is about to
@@ -740,6 +784,7 @@ type
       tab*: TStrTable         # interface table for modules
     of skLet, skVar, skField, skForVar:
       guard*: PSym
+      bitsize*: int
     else: nil
     magic*: TMagic
     typ*: PType
@@ -774,6 +819,8 @@ type
     constraint*: PNode        # additional constraints like 'lit|result'; also
                               # misused for the codegenDecl pragma in the hope
                               # it won't cause problems
+    when defined(nimsuggest):
+      allUsages*: seq[TLineInfo]
 
   TTypeSeq* = seq[PType]
   TLockLevel* = distinct int16
@@ -791,8 +838,8 @@ type
                               # for enum types a list of symbols
                               # for tyInt it can be the int literal
                               # for procs and tyGenericBody, it's the
-                              # the body of the user-defined type class
                               # formal param list
+                              # for concepts, the concept body
                               # else: unused
     owner*: PSym              # the 'owner' of the type
     sym*: PSym                # types have the sym associated with them
@@ -801,6 +848,7 @@ type
                               # mean that there is no destructor.
                               # see instantiateDestructor in semdestruct.nim
     deepCopy*: PSym           # overriden 'deepCopy' operation
+    assignment*: PSym         # overriden '=' operator
     size*: BiggestInt         # the size of the type in bytes
                               # -1 means that the size is unkwown
     align*: int16             # the type's alignment requirements
@@ -834,7 +882,7 @@ type
     data*: TIdNodePairSeq
 
   TNodePair* = object
-    h*: THash                 # because it is expensive to compute!
+    h*: Hash                 # because it is expensive to compute!
     key*: PNode
     val*: int
 
@@ -915,9 +963,7 @@ const
 
   skIterators* = {skIterator, skClosureIterator}
 
-  lfFullExternalName* = lfParamCopy # \
-    # only used when 'gCmd == cmdPretty': Indicates that the symbol has been
-    # imported via 'importc: "fullname"' and no format string.
+var ggDebug* {.deprecated.}: bool ## convenience switch for trying out things
 
 proc isCallExpr*(n: PNode): bool =
   result = n.kind in nkCallKinds
@@ -941,6 +987,9 @@ proc add*(father, son: PNode) =
 proc `[]`*(n: PNode, i: int): PNode {.inline.} =
   result = n.sons[i]
 
+template `-|`*(b, s: expr): expr =
+  (if b >= 0: b else: s.len + b)
+
 # son access operators with support for negative indices
 template `{}`*(n: PNode, i: int): expr = n[i -| n]
 template `{}=`*(n: PNode, i: int, s: PNode): stmt =
@@ -963,6 +1012,10 @@ proc newNode*(kind: TNodeKind): PNode =
       echo "KIND ", result.kind
       writeStackTrace()
     inc gNodeId
+
+proc newTree*(kind: TNodeKind; children: varargs[PNode]): PNode =
+  result = newNode(kind)
+  result.sons = @children
 
 proc newIntNode*(kind: TNodeKind, intVal: BiggestInt): PNode =
   result = newNode(kind)
@@ -994,7 +1047,8 @@ proc newSym*(symKind: TSymKind, name: PIdent, owner: PSym,
   result.id = getID()
   when debugIds:
     registerId(result)
-  #if result.id < 2000:
+  #if result.id == 93289:
+  #  writeStacktrace()
   #  MessageOut(name.s & " has id: " & toString(result.id))
 
 var emptyNode* = newNode(nkEmpty)
@@ -1167,7 +1221,9 @@ proc newType*(kind: TTypeKind, owner: PSym): PType =
   result.lockLevel = UnspecifiedLockLevel
   when debugIds:
     registerId(result)
-  #if result.id < 2000:
+  #if result.id == 92231:
+  #  echo "KNID ", kind
+  #  writeStackTrace()
   #  messageOut(typeKindToStr[kind] & ' has id: ' & toString(result.id))
 
 proc mergeLoc(a: var TLoc, b: TLoc) =
@@ -1190,23 +1246,11 @@ proc newSons*(father: PType, length: int) =
   else:
     setLen(father.sons, length)
 
-proc sonsLen*(n: PType): int =
-  if isNil(n.sons): result = 0
-  else: result = len(n.sons)
-
-proc len*(n: PType): int =
-  if isNil(n.sons): result = 0
-  else: result = len(n.sons)
-
-proc sonsLen*(n: PNode): int =
-  if isNil(n.sons): result = 0
-  else: result = len(n.sons)
-
-proc lastSon*(n: PNode): PNode =
-  result = n.sons[sonsLen(n) - 1]
-
-proc lastSon*(n: PType): PType =
-  result = n.sons[sonsLen(n) - 1]
+proc sonsLen*(n: PType): int = n.sons.len
+proc len*(n: PType): int = n.sons.len
+proc sonsLen*(n: PNode): int = n.sons.len
+proc lastSon*(n: PNode): PNode = n.sons[^1]
+proc lastSon*(n: PType): PType = n.sons[^1]
 
 proc assignType*(dest, src: PType) =
   dest.kind = src.kind
@@ -1217,6 +1261,7 @@ proc assignType*(dest, src: PType) =
   dest.align = src.align
   dest.destructor = src.destructor
   dest.deepCopy = src.deepCopy
+  dest.assignment = src.assignment
   dest.lockLevel = src.lockLevel
   # this fixes 'type TLock = TSysLock':
   if src.sym != nil:
@@ -1313,6 +1358,13 @@ proc skipTypes*(t: PType, kinds: TTypeKinds): PType =
   result = t
   while result.kind in kinds: result = lastSon(result)
 
+proc skipTypesOrNil*(t: PType, kinds: TTypeKinds): PType =
+  ## same as skipTypes but handles 'nil'
+  result = t
+  while result != nil and result.kind in kinds:
+    if result.len == 0: return nil
+    result = lastSon(result)
+
 proc isGCedMem*(t: PType): bool {.inline.} =
   result = t.kind in {tyString, tyRef, tySequence} or
            t.kind == tyProc and t.callConv == ccClosure
@@ -1333,8 +1385,22 @@ proc propagateToOwner*(owner, elem: PType) =
   if elem.isMetaType:
     owner.flags.incl tfHasMeta
 
-  if owner.kind != tyProc:
-    if elem.isGCedMem or tfHasGCedMem in elem.flags:
+  if tfHasAsgn in elem.flags:
+    let o2 = elem.skipTypes({tyGenericInst})
+    if o2.kind in {tyTuple, tyObject, tyArray, tyArrayConstr,
+                   tySequence, tySet, tyDistinct}:
+      o2.flags.incl tfHasAsgn
+      owner.flags.incl tfHasAsgn
+
+  if tfTriggersCompileTime in elem.flags:
+    owner.flags.incl tfTriggersCompileTime
+
+  if owner.kind notin {tyProc, tyGenericInst, tyGenericBody,
+                       tyGenericInvocation, tyPtr}:
+    let elemB = elem.skipTypes({tyGenericInst})
+    if elemB.isGCedMem or tfHasGCedMem in elemB.flags:
+      # for simplicity, we propagate this flag even to generics. We then
+      # ensure this doesn't bite us in sempass2.
       owner.flags.incl tfHasGCedMem
 
 proc rawAddSon*(father, son: PType) =
@@ -1469,6 +1535,9 @@ proc getFloat*(a: PNode): BiggestFloat =
 proc getStr*(a: PNode): string =
   case a.kind
   of nkStrLit..nkTripleStrLit: result = a.strVal
+  of nkNilLit:
+    # let's hope this fixes more problems than it creates:
+    result = nil
   else:
     internalError(a.info, "getStr")
     result = ""
@@ -1526,6 +1595,14 @@ proc makeStmtList*(n: PNode): PNode =
     result = newNodeI(nkStmtList, n.info)
     result.add n
 
+proc skipStmtList*(n: PNode): PNode =
+  if n.kind in {nkStmtList, nkStmtListExpr}:
+    for i in 0 .. n.len-2:
+      if n[i].kind notin {nkEmpty, nkCommentStmt}: return n
+    result = n.lastSon
+  else:
+    result = n
+
 proc createMagic*(name: string, m: TMagic): PSym =
   result = newSym(skProc, getIdent(name), nil, unknownLineInfo())
   result.magic = m
@@ -1533,3 +1610,10 @@ proc createMagic*(name: string, m: TMagic): PSym =
 let
   opNot* = createMagic("not", mNot)
   opContains* = createMagic("contains", mInSet)
+
+when false:
+  proc containsNil*(n: PNode): bool =
+    # only for debugging
+    if n.isNil: return true
+    for i in 0 ..< n.safeLen:
+      if n[i].containsNil: return true

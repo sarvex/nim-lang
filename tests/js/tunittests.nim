@@ -1,3 +1,7 @@
+discard """
+  output: '''[OK] >:)'''
+"""
+
 import unittest
 
 suite "Bacon":

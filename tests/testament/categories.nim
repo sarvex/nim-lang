@@ -22,35 +22,35 @@ proc delNimCache() =
     removeDir(nimcacheDir)
   except OSError:
     echo "[Warning] could not delete: ", nimcacheDir
-    
+
 proc runRodFiles(r: var TResults, cat: Category, options: string) =
   template test(filename: expr): stmt =
     testSpec r, makeTest(rodfilesDir / filename, options, cat, actionRun)
-  
+
   delNimCache()
-  
+
   # test basic recompilation scheme:
   test "hallo"
   test "hallo"
   # test incremental type information:
   test "hallo2"
   delNimCache()
-  
+
   # test type converters:
   test "aconv"
   test "bconv"
   delNimCache()
-  
+
   # test G, A, B example from the documentation; test init sections:
   test "deada"
   test "deada2"
   delNimCache()
-  
+
   # test method generation:
   test "bmethods"
   test "bmethods2"
   delNimCache()
-  
+
   # test generics:
   test "tgeneric1"
   test "tgeneric2"
@@ -75,12 +75,18 @@ proc safeCopyFile(src, dest: string) =
     echo "[Warning] could not copy: ", src, " to ", dest
 
 proc runBasicDLLTest(c, r: var TResults, cat: Category, options: string) =
+  const rpath = when defined(macosx):
+      " --passL:-rpath --passL:@loader_path"
+    else:
+      ""
+
   testSpec c, makeTest("lib/nimrtl.nim",
     options & " --app:lib -d:createNimRtl", cat)
   testSpec c, makeTest("tests/dll/server.nim",
-    options & " --app:lib -d:useNimRtl", cat)
-  
-  when defined(Windows): 
+    options & " --app:lib -d:useNimRtl" & rpath, cat)
+
+
+  when defined(Windows):
     # windows looks in the dir of the exe (yay!):
     var nimrtlDll = DynlibFormat % "nimrtl"
     safeCopyFile("lib" / nimrtlDll, "tests/dll" / nimrtlDll)
@@ -88,17 +94,18 @@ proc runBasicDLLTest(c, r: var TResults, cat: Category, options: string) =
     # posix relies on crappy LD_LIBRARY_PATH (ugh!):
     var libpath = getEnv"LD_LIBRARY_PATH".string
     # Temporarily add the lib directory to LD_LIBRARY_PATH:
-    putEnv("LD_LIBRARY_PATH", "lib:" & libpath)
-    var serverDll = DynlibFormat % "server"
-    safeCopyFile("tests/dll" / serverDll, "lib" / serverDll)
-  
-  testSpec r, makeTest("tests/dll/client.nim", options & " -d:useNimRtl", 
+    putEnv("LD_LIBRARY_PATH", "tests/dll:" & libpath)
+    defer: putEnv("LD_LIBRARY_PATH", libpath)
+    var nimrtlDll = DynlibFormat % "nimrtl"
+    safeCopyFile("lib" / nimrtlDll, "tests/dll" / nimrtlDll)
+
+  testSpec r, makeTest("tests/dll/client.nim", options & " -d:useNimRtl" & rpath,
                        cat, actionRun)
 
 proc dllTests(r: var TResults, cat: Category, options: string) =
   # dummy compile result:
   var c = initResults()
-  
+
   runBasicDLLTest c, r, cat, options
   runBasicDLLTest c, r, cat, options & " -d:release"
   runBasicDLLTest c, r, cat, options & " --gc:boehm"
@@ -114,13 +121,23 @@ proc gcTests(r: var TResults, cat: Category, options: string) =
     testSpec r, makeTest("tests/gc" / filename, options &
                   " -d:release -d:useRealtimeGC", cat, actionRun)
 
-  template test(filename: expr): stmt =
+  template testWithoutBoehm(filename: expr): stmt =
     testWithoutMs filename
     testSpec r, makeTest("tests/gc" / filename, options &
                   " --gc:markAndSweep", cat, actionRun)
     testSpec r, makeTest("tests/gc" / filename, options &
                   " -d:release --gc:markAndSweep", cat, actionRun)
+  template test(filename: expr): stmt =
+    testWithoutBoehm filename
+    when not defined(windows):
+      # AR: cannot find any boehm.dll on the net, right now, so disabled
+      # for windows:
+      testSpec r, makeTest("tests/gc" / filename, options &
+                    " --gc:boehm", cat, actionRun)
+      testSpec r, makeTest("tests/gc" / filename, options &
+                    " -d:release --gc:boehm", cat, actionRun)
 
+  test "gcemscripten"
   test "growobjcrash"
   test "gcbench"
   test "gcleak"
@@ -130,13 +147,25 @@ proc gcTests(r: var TResults, cat: Category, options: string) =
   test "gcleak4"
   # Disabled because it works and takes too long to run:
   #test "gcleak5"
-  test "weakrefs"
+  testWithoutBoehm "weakrefs"
   test "cycleleak"
-  test "closureleak"
+  testWithoutBoehm "closureleak"
   testWithoutMs "refarrayleak"
-  
+
   test "stackrefleak"
   test "cyclecollector"
+
+proc longGCTests(r: var TResults, cat: Category, options: string) =
+  when defined(windows):
+    let cOptions = "gcc -ldl -DWIN"
+  else:
+    let cOptions = "gcc -ldl"
+
+  var c = initResults()
+  # According to ioTests, this should compile the file
+  testNoSpec c, makeTest("tests/realtimeGC/shared", options, cat, actionCompile)
+  testC r, makeTest("tests/realtimeGC/cmain", cOptions, cat, actionRun)
+  testSpec r, makeTest("tests/realtimeGC/nmain", options & "--threads: on", cat, actionRun)
 
 # ------------------------- threading tests -----------------------------------
 
@@ -147,7 +176,7 @@ proc threadTests(r: var TResults, cat: Category, options: string) =
       " -d:release", cat, actionRun)
     testSpec r, makeTest("tests/threads" / filename, options &
       " --tlsEmulation:on", cat, actionRun)
-  
+
   test "tactors"
   test "tactors2"
   test "threadex"
@@ -182,15 +211,20 @@ proc jsTests(r: var TResults, cat: Category, options: string) =
                          actionRun, targetJS)
     testSpec r, makeTest(filename, options & " -d:nodejs -d:release", cat,
                          actionRun, targetJS)
-    
+
   for t in os.walkFiles("tests/js/t*.nim"):
     test(t)
   for testfile in ["exception/texceptions", "exception/texcpt1",
                    "exception/texcsub", "exception/tfinally",
                    "exception/tfinally2", "exception/tfinally3",
                    "actiontable/tactiontable", "method/tmultim1",
-                   "method/tmultim3", "method/tmultim4"]:
+                   "method/tmultim3", "method/tmultim4",
+                   "varres/tvarres0", "varres/tvarres3", "varres/tvarres4",
+                   "varres/tvartup"]:
     test "tests/" & testfile & ".nim"
+
+  for testfile in ["pure/strutils"]:
+    test "lib/" & testfile & ".nim"
 
 # ------------------------- manyloc -------------------------------------------
 #proc runSpecialTests(r: var TResults, options: string) =
@@ -199,13 +233,13 @@ proc jsTests(r: var TResults, cat: Category, options: string) =
 
 proc findMainFile(dir: string): string =
   # finds the file belonging to ".nim.cfg"; if there is no such file
-  # it returns the some ".nim" file if there is only one: 
+  # it returns the some ".nim" file if there is only one:
   const cfgExt = ".nim.cfg"
   result = ""
   var nimFiles = 0
   for kind, file in os.walkDir(dir):
     if kind == pcFile:
-      if file.endsWith(cfgExt): return file[.. -(cfgExt.len+1)] & ".nim"
+      if file.endsWith(cfgExt): return file[.. ^(cfgExt.len+1)] & ".nim"
       elif file.endsWith(".nim"):
         if result.len == 0: result = file
         inc nimFiles
@@ -215,7 +249,7 @@ proc manyLoc(r: var TResults, cat: Category, options: string) =
   for kind, dir in os.walkDir("tests/manyloc"):
     if kind == pcDir:
       let mainfile = findMainFile(dir)
-      if mainfile != ".nim":
+      if mainfile != "":
         testNoSpec r, makeTest(mainfile, options, cat)
 
 proc compileExample(r: var TResults, pattern, options: string, cat: Category) =
@@ -226,7 +260,7 @@ proc testStdlib(r: var TResults, pattern, options: string, cat: Category) =
   for test in os.walkFiles(pattern):
     let contents = readFile(test).string
     if contents.contains("when isMainModule"):
-      testSpec r, makeTest(test, options, cat, actionRun)
+      testSpec r, makeTest(test, options, cat, actionRunNoSpec)
     else:
       testNoSpec r, makeTest(test, options, cat, actionCompile)
 
@@ -236,7 +270,7 @@ type PackageFilter = enum
   pfExtraOnly
   pfAll
 
-let 
+let
   nimbleExe = findExe("nimble")
   nimbleDir = getHomeDir() / ".nimble"
   packageDir = nimbleDir / "pkgs"
@@ -327,7 +361,7 @@ proc `&?.`(a, b: string): string =
   # candidate for the stdlib?
   result = if a.endswith(b): a else: a & b
 
-proc processCategory(r: var TResults, cat: Category, options: string) =
+proc processCategory(r: var TResults, cat: Category, options: string, fileGlob: string = "t*.nim") =
   case cat.string.normalize
   of "rodfiles":
     discard # Disabled for now
@@ -340,6 +374,8 @@ proc processCategory(r: var TResults, cat: Category, options: string) =
     dllTests(r, cat, options)
   of "gc":
     gcTests(r, cat, options)
+  of "longgc":
+    longGCTests(r, cat, options)
   of "debugger":
     debuggerTests(r, cat, options)
   of "manyloc":
@@ -361,6 +397,9 @@ proc processCategory(r: var TResults, cat: Category, options: string) =
     testNimblePackages(r, cat, pfExtraOnly)
   of "nimble-all":
     testNimblePackages(r, cat, pfAll)
+  of "untestable":
+    # We can't test it because it depends on a third party.
+    discard # TODO: Move untestable tests to someplace else, i.e. nimble repo.
   else:
-    for name in os.walkFiles("tests" & DirSep &.? cat.string / "t*.nim"):
+    for name in os.walkFiles("tests" & DirSep &.? cat.string / fileGlob):
       testSpec r, makeTest(name, options, cat)

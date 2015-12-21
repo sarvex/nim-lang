@@ -12,7 +12,7 @@
 import strutils, json
 
 type
-  TRstNodeKind* = enum        ## the possible node kinds of an PRstNode
+  RstNodeKind* = enum        ## the possible node kinds of an PRstNode
     rnInner,                  # an inner node or a root
     rnHeadline,               # a headline
     rnOverline,               # an over- and underlined headline
@@ -30,7 +30,7 @@ type
     rnField,                  # a field item
     rnFieldName,              # consisting of a field name ...
     rnFieldBody,              # ... and a field body
-    rnOptionList, rnOptionListItem, rnOptionGroup, rnOption, rnOptionString, 
+    rnOptionList, rnOptionListItem, rnOptionGroup, rnOption, rnOptionString,
     rnOptionArgument, rnDescription, rnLiteralBlock, rnQuotedLiteralBlock,
     rnLineBlock,              # the | thingie
     rnLineBlockItem,          # sons of the | thing
@@ -50,7 +50,7 @@ type
                               #     * `file#id <file#id>'_
     rnSubstitutionDef,        # a definition of a substitution
     rnGeneralRole,            # Inline markup:
-    rnSub, rnSup, rnIdx, 
+    rnSub, rnSup, rnIdx,
     rnEmphasis,               # "*"
     rnStrongEmphasis,         # "**"
     rnTripleEmphasis,         # "***"
@@ -62,62 +62,66 @@ type
                               # leaf val
 
 
-  PRstNode* = ref TRstNode    ## an RST node
-  TRstNodeSeq* = seq[PRstNode]
-  TRstNode* {.acyclic, final.} = object ## an RST node's description
-    kind*: TRstNodeKind       ## the node's kind
+  PRstNode* = ref RstNode    ## an RST node
+  RstNodeSeq* = seq[PRstNode]
+  RstNode* {.acyclic, final.} = object ## an RST node's description
+    kind*: RstNodeKind       ## the node's kind
     text*: string             ## valid for leafs in the AST; and the title of
                               ## the document or the section
     level*: int               ## valid for some node kinds
-    sons*: TRstNodeSeq        ## the node's sons
+    sons*: RstNodeSeq        ## the node's sons
+{.deprecated: [TRstNodeKind: RstNodeKind, TRstNodeSeq: RstNodeSeq,
+              TRstNode: RstNode].}
 
-proc len*(n: PRstNode): int = 
+proc len*(n: PRstNode): int =
   result = len(n.sons)
 
-proc newRstNode*(kind: TRstNodeKind): PRstNode = 
+proc newRstNode*(kind: RstNodeKind): PRstNode =
   new(result)
   result.sons = @[]
   result.kind = kind
 
-proc newRstNode*(kind: TRstNodeKind, s: string): PRstNode = 
+proc newRstNode*(kind: RstNodeKind, s: string): PRstNode =
   result = newRstNode(kind)
   result.text = s
 
-proc lastSon*(n: PRstNode): PRstNode = 
+proc lastSon*(n: PRstNode): PRstNode =
   result = n.sons[len(n.sons)-1]
 
 proc add*(father, son: PRstNode) =
   add(father.sons, son)
 
-proc addIfNotNil*(father, son: PRstNode) = 
+proc addIfNotNil*(father, son: PRstNode) =
   if son != nil: add(father, son)
 
 
 type
-  TRenderContext {.pure.} = object
+  RenderContext {.pure.} = object
     indent: int
     verbatim: int
+{.deprecated: [TRenderContext: RenderContext].}
 
-proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string)
+proc renderRstToRst(d: var RenderContext, n: PRstNode,
+                    result: var string) {.gcsafe.}
 
-proc renderRstSons(d: var TRenderContext, n: PRstNode, result: var string) = 
-  for i in countup(0, len(n) - 1): 
+proc renderRstSons(d: var RenderContext, n: PRstNode, result: var string) =
+  for i in countup(0, len(n) - 1):
     renderRstToRst(d, n.sons[i], result)
-  
-proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
+
+proc renderRstToRst(d: var RenderContext, n: PRstNode, result: var string) =
   # this is needed for the index generation; it may also be useful for
   # debugging, but most code is already debugged...
-  const 
+  const
     lvlToChar: array[0..8, char] = ['!', '=', '-', '~', '`', '<', '*', '|', '+']
   if n == nil: return
   var ind = spaces(d.indent)
   case n.kind
-  of rnInner: 
+  of rnInner:
     renderRstSons(d, n, result)
   of rnHeadline:
     result.add("\n")
     result.add(ind)
-    
+
     let oldLen = result.len
     renderRstSons(d, n, result)
     let headlineLen = result.len - oldLen
@@ -131,16 +135,16 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
 
     var headline = ""
     renderRstSons(d, n, headline)
-    
+
     let lvl = repeat(lvlToChar[n.level], headline.len - d.indent)
     result.add(lvl)
     result.add("\n")
     result.add(headline)
-    
+
     result.add("\n")
     result.add(ind)
     result.add(lvl)
-  of rnTransition: 
+  of rnTransition:
     result.add("\n\n")
     result.add(ind)
     result.add repeat('-', 78-d.indent)
@@ -149,11 +153,11 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
     result.add("\n\n")
     result.add(ind)
     renderRstSons(d, n, result)
-  of rnBulletItem: 
+  of rnBulletItem:
     inc(d.indent, 2)
     var tmp = ""
     renderRstSons(d, n, tmp)
-    if tmp.len > 0: 
+    if tmp.len > 0:
       result.add("\n")
       result.add(ind)
       result.add("* ")
@@ -163,22 +167,22 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
     inc(d.indent, 4)
     var tmp = ""
     renderRstSons(d, n, tmp)
-    if tmp.len > 0: 
+    if tmp.len > 0:
       result.add("\n")
       result.add(ind)
       result.add("(#) ")
       result.add(tmp)
     dec(d.indent, 4)
-  of rnOptionList, rnFieldList, rnDefList, rnDefItem, rnLineBlock, rnFieldName, 
-     rnFieldBody, rnStandaloneHyperlink, rnBulletList, rnEnumList: 
+  of rnOptionList, rnFieldList, rnDefList, rnDefItem, rnLineBlock, rnFieldName,
+     rnFieldBody, rnStandaloneHyperlink, rnBulletList, rnEnumList:
     renderRstSons(d, n, result)
-  of rnDefName: 
+  of rnDefName:
     result.add("\n\n")
     result.add(ind)
     renderRstSons(d, n, result)
   of rnDefBody:
     inc(d.indent, 2)
-    if n.sons[0].kind != rnBulletList: 
+    if n.sons[0].kind != rnBulletList:
       result.add("\n")
       result.add(ind)
       result.add("  ")
@@ -187,10 +191,10 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
   of rnField:
     var tmp = ""
     renderRstToRst(d, n.sons[0], tmp)
-    
+
     var L = max(tmp.len + 3, 30)
     inc(d.indent, L)
-    
+
     result.add "\n"
     result.add ind
     result.add ':'
@@ -198,9 +202,9 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
     result.add ':'
     result.add spaces(L - tmp.len - 2)
     renderRstToRst(d, n.sons[1], result)
-    
+
     dec(d.indent, L)
-  of rnLineBlockItem: 
+  of rnLineBlockItem:
     result.add("\n")
     result.add(ind)
     result.add("| ")
@@ -209,11 +213,11 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
     inc(d.indent, 2)
     renderRstSons(d, n, result)
     dec(d.indent, 2)
-  of rnRef: 
+  of rnRef:
     result.add("`")
     renderRstSons(d, n, result)
     result.add("`_")
-  of rnHyperlink: 
+  of rnHyperlink:
     result.add('`')
     renderRstToRst(d, n.sons[0], result)
     result.add(" <")
@@ -225,23 +229,23 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
     result.add("`:")
     renderRstToRst(d, n.sons[1],result)
     result.add(':')
-  of rnSub: 
+  of rnSub:
     result.add('`')
     renderRstSons(d, n, result)
     result.add("`:sub:")
-  of rnSup: 
+  of rnSup:
     result.add('`')
     renderRstSons(d, n, result)
     result.add("`:sup:")
-  of rnIdx: 
+  of rnIdx:
     result.add('`')
     renderRstSons(d, n, result)
     result.add("`:idx:")
-  of rnEmphasis: 
+  of rnEmphasis:
     result.add("*")
     renderRstSons(d, n, result)
     result.add("*")
-  of rnStrongEmphasis: 
+  of rnStrongEmphasis:
     result.add("**")
     renderRstSons(d, n, result)
     result.add("**")
@@ -249,11 +253,11 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
     result.add("***")
     renderRstSons(d, n, result)
     result.add("***")
-  of rnInterpretedText: 
+  of rnInterpretedText:
     result.add('`')
     renderRstSons(d, n, result)
     result.add('`')
-  of rnInlineLiteral: 
+  of rnInlineLiteral:
     inc(d.verbatim)
     result.add("``")
     renderRstSons(d, n, result)
@@ -266,11 +270,11 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
       result.add("\\\\") # XXX: escape more special characters!
     else:
       result.add(n.text)
-  of rnIndex: 
+  of rnIndex:
     result.add("\n\n")
     result.add(ind)
     result.add(".. index::\n")
-    
+
     inc(d.indent, 3)
     if n.sons[2] != nil: renderRstSons(d, n.sons[2], result)
     dec(d.indent, 3)
@@ -280,10 +284,10 @@ proc renderRstToRst(d: var TRenderContext, n: PRstNode, result: var string) =
     result.add(".. contents::")
   else:
     result.add("Error: cannot render: " & $n.kind)
-  
+
 proc renderRstToRst*(n: PRstNode, result: var string) =
   ## renders `n` into its string representation and appends to `result`.
-  var d: TRenderContext
+  var d: RenderContext
   renderRstToRst(d, n, result)
 
 proc renderRstToJsonNode(node: PRstNode): JsonNode =
@@ -302,7 +306,7 @@ proc renderRstToJsonNode(node: PRstNode): JsonNode =
 
 proc renderRstToJson*(node: PRstNode): string =
   ## Writes the given RST node as JSON that is in the form
-  ## :: 
+  ## ::
   ##   {
   ##     "kind":string node.kind,
   ##     "text":optional string node.text,

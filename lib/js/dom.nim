@@ -14,33 +14,35 @@ when not defined(js) and not defined(Nimdoc):
   {.error: "This module only works on the JavaScript platform".}
 
 type
-  TEventHandlers* {.importc.} = object of RootObj
-    onabort*: proc (event: ref TEvent) {.nimcall.}
-    onblur*: proc (event: ref TEvent) {.nimcall.}
-    onchange*: proc (event: ref TEvent) {.nimcall.}
-    onclick*: proc (event: ref TEvent) {.nimcall.}
-    ondblclick*: proc (event: ref TEvent) {.nimcall.}
-    onerror*: proc (event: ref TEvent) {.nimcall.}
-    onfocus*: proc (event: ref TEvent) {.nimcall.}
-    onkeydown*: proc (event: ref TEvent) {.nimcall.}
-    onkeypress*: proc (event: ref TEvent) {.nimcall.}
-    onkeyup*: proc (event: ref TEvent) {.nimcall.}
-    onload*: proc (event: ref TEvent) {.nimcall.}
-    onmousedown*: proc (event: ref TEvent) {.nimcall.}
-    onmousemove*: proc (event: ref TEvent) {.nimcall.}
-    onmouseout*: proc (event: ref TEvent) {.nimcall.}
-    onmouseover*: proc (event: ref TEvent) {.nimcall.}
-    onmouseup*: proc (event: ref TEvent) {.nimcall.}
-    onreset*: proc (event: ref TEvent) {.nimcall.}
-    onselect*: proc (event: ref TEvent) {.nimcall.}
-    onsubmit*: proc (event: ref TEvent) {.nimcall.}
-    onunload*: proc (event: ref TEvent) {.nimcall.}
+  EventTarget* = ref EventTargetObj
+  EventTargetObj {.importc.} = object of RootObj
+    onabort*: proc (event: Event) {.nimcall.}
+    onblur*: proc (event: Event) {.nimcall.}
+    onchange*: proc (event: Event) {.nimcall.}
+    onclick*: proc (event: Event) {.nimcall.}
+    ondblclick*: proc (event: Event) {.nimcall.}
+    onerror*: proc (event: Event) {.nimcall.}
+    onfocus*: proc (event: Event) {.nimcall.}
+    onkeydown*: proc (event: Event) {.nimcall.}
+    onkeypress*: proc (event: Event) {.nimcall.}
+    onkeyup*: proc (event: Event) {.nimcall.}
+    onload*: proc (event: Event) {.nimcall.}
+    onmousedown*: proc (event: Event) {.nimcall.}
+    onmousemove*: proc (event: Event) {.nimcall.}
+    onmouseout*: proc (event: Event) {.nimcall.}
+    onmouseover*: proc (event: Event) {.nimcall.}
+    onmouseup*: proc (event: Event) {.nimcall.}
+    onreset*: proc (event: Event) {.nimcall.}
+    onselect*: proc (event: Event) {.nimcall.}
+    onsubmit*: proc (event: Event) {.nimcall.}
+    onunload*: proc (event: Event) {.nimcall.}
 
-  TWindow* {.importc.} = object of TEventHandlers
-    document*: ref TDocument
-    event*: ref TEvent
-    history*: ref THistory
-    location*: ref TLocation
+  Window* = ref WindowObj
+  WindowObj {.importc.} = object of EventTargetObj
+    document*: Document
+    event*: Event
+    history*: History
+    location*: Location
     closed*: bool
     defaultStatus*: cstring
     innerHeight*, innerWidth*: int
@@ -54,158 +56,15 @@ type
     statusbar*: ref TStatusBar
     status*: cstring
     toolbar*: ref TToolBar
-
-    addEventListener*: proc(ev: cstring, cb: proc(ev: ref TEvent) ) {.nimcall.}
-    alert*: proc (msg: cstring) {.nimcall.}
-    back*: proc () {.nimcall.}
-    blur*: proc () {.nimcall.}
-    captureEvents*: proc (eventMask: int) {.nimcall.}
-    clearInterval*: proc (interval: ref TInterval) {.nimcall.}
-    clearTimeout*: proc (timeout: ref TTimeOut) {.nimcall.}
-    close*: proc () {.nimcall.}
-    confirm*: proc (msg: cstring): bool {.nimcall.}
-    disableExternalCapture*: proc () {.nimcall.}
-    enableExternalCapture*: proc () {.nimcall.}
-    find*: proc (text: cstring, caseSensitive = false, 
-                 backwards = false) {.nimcall.}
-    focus*: proc () {.nimcall.}
-    forward*: proc () {.nimcall.}
-    handleEvent*: proc (e: ref TEvent) {.nimcall.}
-    home*: proc () {.nimcall.}
-    moveBy*: proc (x, y: int) {.nimcall.}
-    moveTo*: proc (x, y: int) {.nimcall.}
-    open*: proc (uri, windowname: cstring,
-                 properties: cstring = nil): ref TWindow {.nimcall.}
-    print*: proc () {.nimcall.}
-    prompt*: proc (text, default: cstring): cstring {.nimcall.}
-    releaseEvents*: proc (eventMask: int) {.nimcall.}
-    resizeBy*: proc (x, y: int) {.nimcall.}
-    resizeTo*: proc (x, y: int) {.nimcall.}
-    routeEvent*: proc (event: ref TEvent) {.nimcall.}
-    scrollBy*: proc (x, y: int) {.nimcall.}
-    scrollTo*: proc (x, y: int) {.nimcall.}
-    setInterval*: proc (code: cstring, pause: int): ref TInterval {.nimcall.}
-    setTimeout*: proc (code: cstring, pause: int): ref TTimeOut {.nimcall.}
-    stop*: proc () {.nimcall.}
     frames*: seq[TFrame]
 
-  TFrame* {.importc.} = object of TWindow
+  Frame* = ref FrameObj
+  FrameObj {.importc.} = object of WindowObj
 
-  TDocument* {.importc.} = object of TEventHandlers
-    addEventListener*: proc(ev: cstring, cb: proc(ev: ref TEvent) ) {.nimcall.}
-    alinkColor*: cstring
-    bgColor*: cstring
-    charset*: cstring
-    cookie*: cstring
-    defaultCharset*: cstring
-    fgColor*: cstring
-    lastModified*: cstring
-    linkColor*: cstring
-    referrer*: cstring
-    title*: cstring
-    URL*: cstring
-    vlinkColor*: cstring
-    captureEvents*: proc (eventMask: int) {.nimcall.}
-    createAttribute*: proc (identifier: cstring): ref TNode {.nimcall.}
-    createElement*: proc (identifier: cstring): ref TNode {.nimcall.}
-    createTextNode*: proc (identifier: cstring): ref TNode {.nimcall.}
-    getElementById*: proc (id: cstring): ref TNode {.nimcall.}
-    getElementsByName*: proc (name: cstring): seq[ref TNode] {.nimcall.}
-    getElementsByTagName*: proc (name: cstring): seq[ref TNode] {.nimcall.}
-    getElementsByClassName*: proc (name: cstring): seq[ref TNode] {.nimcall.}
-    getSelection*: proc (): cstring {.nimcall.}
-    handleEvent*: proc (event: ref TEvent) {.nimcall.}
-    open*: proc () {.nimcall.}
-    releaseEvents*: proc (eventMask: int) {.nimcall.}
-    routeEvent*: proc (event: ref TEvent) {.nimcall.}
-    write*: proc (text: cstring) {.nimcall.}
-    writeln*: proc (text: cstring) {.nimcall.}
-    anchors*: seq[ref TAnchor]
-    forms*: seq[ref TForm]
-    images*: seq[ref TImage]
-    applets*: seq[ref TApplet]
-    embeds*: seq[ref TEmbed]
-    links*: seq[ref TLink]
+  ClassList* = ref ClassListObj
+  ClassListObj {.importc.} = object of RootObj
 
-  TLink* {.importc.} = object of RootObj
-    name*: cstring
-    target*: cstring
-    text*: cstring
-    x*: int
-    y*: int
-
-  TEmbed* {.importc.} = object of RootObj
-    height*: int
-    hspace*: int
-    name*: cstring
-    src*: cstring
-    width*: int
-    `type`*: cstring
-    vspace*: int
-    play*: proc () {.nimcall.}
-    stop*: proc () {.nimcall.}
-
-  TAnchor* {.importc.} = object of RootObj
-    name*: cstring
-    text*: cstring
-    x*, y*: int
-
-  TApplet* {.importc.} = object of RootObj
-
-  TElement* {.importc.} = object of TEventHandlers
-    checked*: bool
-    defaultChecked*: bool
-    defaultValue*: cstring
-    disabled*: bool
-    form*: ref TForm
-    name*: cstring
-    readOnly*: bool
-    `type`*: cstring
-    value*: cstring
-    blur*: proc () {.nimcall.}
-    click*: proc () {.nimcall.}
-    focus*: proc () {.nimcall.}
-    handleEvent*: proc (event: ref TEvent) {.nimcall.}
-    select*: proc () {.nimcall.}
-    options*: seq[ref TOption]
-
-  TOption* {.importc.} = object of RootObj
-    defaultSelected*: bool
-    selected*: bool
-    selectedIndex*: int
-    text*: cstring
-    value*: cstring
-
-  TForm* {.importc.} = object of TEventHandlers
-    action*: cstring
-    encoding*: cstring
-    `method`*: cstring
-    name*: cstring
-    target*: cstring
-    handleEvent*: proc (event: ref TEvent) {.nimcall.}
-    reset*: proc () {.nimcall.}
-    submit*: proc () {.nimcall.}
-    elements*: seq[ref TElement]
-
-  TImage* {.importc.} = object of TEventHandlers
-    border*: int
-    complete*: bool
-    height*: int
-    hspace*: int
-    lowsrc*: cstring
-    name*: cstring
-    src*: cstring
-    vspace*: int
-    width*: int
-    handleEvent*: proc (event: ref TEvent) {.nimcall.}
-
-  ClassList* {.importc.} = object of RootObj
-    add*: proc (class: cstring) {.nimcall.}
-    remove*: proc (class: cstring) {.nimcall.}
-    contains*: proc (class: cstring):bool {.nimcall.}
-    toggle*: proc (class: cstring) {.nimcall.}
-
-  TNodeType* = enum
+  NodeType* = enum
     ElementNode = 1,
     AttributeNode,
     TextNode,
@@ -218,44 +77,109 @@ type
     DocumentTypeNode,
     DocumentFragmentNode,
     NotationNode
-  TNode* {.importc.} = object of RootObj
-    attributes*: seq[ref TNode]
-    childNodes*: seq[ref TNode]
-    children*: seq[ref TNode]
-    classList*: ref Classlist
-    data*: cstring
-    firstChild*: ref TNode
-    lastChild*: ref TNode
-    nextSibling*: ref TNode
-    nodeName*: cstring
-    nodeType*: TNodeType
-    nodeValue*: cstring
-    parentNode*: ref TNode
-    previousSibling*: ref TNode
-    appendChild*: proc (child: ref TNode) {.nimcall.}
-    appendData*: proc (data: cstring) {.nimcall.}
-    cloneNode*: proc (copyContent: bool): ref TNode {.nimcall.}
-    deleteData*: proc (start, len: int) {.nimcall.}
-    getAttribute*: proc (attr: cstring): cstring {.nimcall.}
-    getAttributeNode*: proc (attr: cstring): ref TNode {.nimcall.}
-    getElementsByTagName*: proc (name: cstring): seq[ref TNode] {.nimcall.}
-    getElementsByClassName*: proc (name: cstring): seq[ref TNode] {.nimcall.}
-    hasChildNodes*: proc (): bool {.nimcall.}
-    innerHTML*: cstring
-    insertBefore*: proc (newNode, before: ref TNode) {.nimcall.}
-    insertData*: proc (position: int, data: cstring) {.nimcall.}
-    addEventListener*: proc(ev: cstring, cb: proc(ev: ref TEvent)) {.nimcall.}
-    removeAttribute*: proc (attr: cstring) {.nimcall.}
-    removeAttributeNode*: proc (attr: ref TNode) {.nimcall.}
-    removeChild*: proc (child: ref TNode) {.nimcall.}
-    replaceChild*: proc (newNode, oldNode: ref TNode) {.nimcall.}
-    replaceData*: proc (start, len: int, text: cstring) {.nimcall.}
-    scrollIntoView*: proc () {.nimcall.}
-    setAttribute*: proc (name, value: cstring) {.nimcall.}
-    setAttributeNode*: proc (attr: ref TNode) {.nimcall.}
-    style*: ref TStyle
 
-  TStyle* {.importc.} = object of RootObj
+  Node* = ref NodeObj
+  NodeObj {.importc.} = object of EventTargetObj
+    attributes*: seq[Node]
+    childNodes*: seq[Node]
+    children*: seq[Node]
+    data*: cstring
+    firstChild*: Node
+    lastChild*: Node
+    nextSibling*: Node
+    nodeName*: cstring
+    nodeType*: NodeType
+    nodeValue*: cstring
+    parentNode*: Node
+    previousSibling*: Node
+    innerHTML*: cstring
+    style*: Style
+
+  Document* = ref DocumentObj
+  DocumentObj {.importc.} = object of NodeObj
+    alinkColor*: cstring
+    bgColor*: cstring
+    body*: Element
+    charset*: cstring
+    cookie*: cstring
+    defaultCharset*: cstring
+    fgColor*: cstring
+    head*: Element
+    lastModified*: cstring
+    linkColor*: cstring
+    referrer*: cstring
+    title*: cstring
+    URL*: cstring
+    vlinkColor*: cstring
+    anchors*: seq[AnchorElement]
+    forms*: seq[FormElement]
+    images*: seq[ImageElement]
+    applets*: seq[Element]
+    embeds*: seq[EmbedElement]
+    links*: seq[LinkElement]
+
+  Element* = ref ElementObj
+  ElementObj {.importc.} = object of NodeObj
+    classList*: Classlist
+    checked*: bool
+    defaultChecked*: bool
+    defaultValue*: cstring
+    disabled*: bool
+    form*: FormElement
+    name*: cstring
+    readOnly*: bool
+    options*: seq[OptionElement]
+
+  LinkElement* = ref LinkObj
+  LinkObj {.importc.} = object of ElementObj
+    target*: cstring
+    text*: cstring
+    x*: int
+    y*: int
+
+  EmbedElement* = ref EmbedObj
+  EmbedObj {.importc.} = object of ElementObj
+    height*: int
+    hspace*: int
+    src*: cstring
+    width*: int
+    `type`*: cstring
+    vspace*: int
+
+  AnchorElement* = ref AnchorObj
+  AnchorObj {.importc.} = object of ElementObj
+    text*: cstring
+    x*, y*: int
+
+  OptionElement* = ref OptionObj
+  OptionObj {.importc.} = object of ElementObj
+    defaultSelected*: bool
+    selected*: bool
+    selectedIndex*: int
+    text*: cstring
+    value*: cstring
+
+  FormElement* = ref FormObj
+  FormObj {.importc.} = object of ElementObj
+    action*: cstring
+    encoding*: cstring
+    `method`*: cstring
+    target*: cstring
+    elements*: seq[Element]
+
+  ImageElement* = ref ImageObj
+  ImageObj {.importc.} = object of ElementObj
+    border*: int
+    complete*: bool
+    height*: int
+    hspace*: int
+    lowsrc*: cstring
+    src*: cstring
+    vspace*: int
+    width*: int
+
+  Style = ref StyleObj
+  StyleObj {.importc.} = object of RootObj
     background*: cstring
     backgroundAttachment*: cstring
     backgroundColor*: cstring
@@ -345,12 +269,10 @@ type
     width*: cstring
     wordSpacing*: cstring
     zIndex*: int
-    getAttribute*: proc (attr: cstring, caseSensitive=false): cstring {.nimcall.}
-    removeAttribute*: proc (attr: cstring, caseSensitive=false) {.nimcall.}
-    setAttribute*: proc (attr, value: cstring, caseSensitive=false) {.nimcall.}
 
-  TEvent* {.importc.} = object of RootObj
-    target*: ref TNode
+  Event* = ref EventObj
+  EventObj {.importc.} = object of RootObj
+    target*: Node
     altKey*, ctrlKey*, shiftKey*: bool
     button*: int
     clientX*, clientY*: int
@@ -388,7 +310,8 @@ type
     SUBMIT*: int
     UNLOAD*: int
 
-  TLocation* {.importc.} = object of RootObj
+  Location* = ref LocationObj
+  LocationObj {.importc.} = object of RootObj
     hash*: cstring
     host*: cstring
     hostname*: cstring
@@ -397,16 +320,13 @@ type
     port*: cstring
     protocol*: cstring
     search*: cstring
-    reload*: proc () {.nimcall.}
-    replace*: proc (s: cstring) {.nimcall.}
 
-  THistory* {.importc.} = object of RootObj
+  History* = ref HistoryObj
+  HistoryObj {.importc.} = object of RootObj
     length*: int
-    back*: proc () {.nimcall.}
-    forward*: proc () {.nimcall.}
-    go*: proc (pagesToJump: int) {.nimcall.}
 
-  TNavigator* {.importc.} = object of RootObj
+  Navigator* = ref NavigatorObj
+  NavigatorObj {.importc.} = object of RootObj
     appCodeName*: cstring
     appName*: cstring
     appVersion*: cstring
@@ -414,7 +334,6 @@ type
     language*: cstring
     platform*: cstring
     userAgent*: cstring
-    javaEnabled*: proc (): bool {.nimcall.}
     mimeTypes*: seq[ref TMimeType]
 
   TPlugin* {.importc.} = object of RootObj
@@ -436,7 +355,8 @@ type
   TToolBar* = TLocationBar
   TStatusBar* = TLocationBar
 
-  TScreen* {.importc.} = object of RootObj
+  Screen = ref ScreenObj
+  ScreenObj {.importc.} = object of RootObj
     availHeight*: int
     availWidth*: int
     colorDepth*: int
@@ -447,11 +367,127 @@ type
   TTimeOut* {.importc.} = object of RootObj
   TInterval* {.importc.} = object of RootObj
 
+{.push importcpp.}
+
+# EventTarget "methods"
+proc addEventListener*(et: EventTarget, ev: cstring, cb: proc(ev: Event), useCapture: bool = false)
+
+# Window "methods"
+proc alert*(w: Window, msg: cstring)
+proc back*(w: Window)
+proc blur*(w: Window)
+proc captureEvents*(w: Window, eventMask: int) {.deprecated.}
+proc clearInterval*(w: Window, interval: ref TInterval)
+proc clearTimeout*(w: Window, timeout: ref TTimeOut)
+proc close*(w: Window)
+proc confirm*(w: Window, msg: cstring): bool
+proc disableExternalCapture*(w: Window)
+proc enableExternalCapture*(w: Window)
+proc find*(w: Window, text: cstring, caseSensitive = false,
+           backwards = false)
+proc focus*(w: Window)
+proc forward*(w: Window)
+proc handleEvent*(w: Window, e: Event)
+proc home*(w: Window)
+proc moveBy*(w: Window, x, y: int)
+proc moveTo*(w: Window, x, y: int)
+proc open*(w: Window, uri, windowname: cstring,
+           properties: cstring = nil): Window
+proc print*(w: Window)
+proc prompt*(w: Window, text, default: cstring): cstring
+proc releaseEvents*(w: Window, eventMask: int) {.deprecated.}
+proc resizeBy*(w: Window, x, y: int)
+proc resizeTo*(w: Window, x, y: int)
+proc routeEvent*(w: Window, event: Event)
+proc scrollBy*(w: Window, x, y: int)
+proc scrollTo*(w: Window, x, y: int)
+proc setInterval*(w: Window, code: cstring, pause: int): ref TInterval
+proc setTimeout*(w: Window, code: cstring, pause: int): ref TTimeOut
+proc stop*(w: Window)
+
+# Node "methods"
+proc appendChild*(n, child: Node)
+proc appendData*(n: Node, data: cstring)
+proc cloneNode*(n: Node, copyContent: bool): Node
+proc deleteData*(n: Node, start, len: int)
+proc getAttribute*(n: Node, attr: cstring): cstring
+proc getAttributeNode*(n: Node, attr: cstring): Node
+proc hasChildNodes*(n: Node): bool
+proc insertBefore*(n, newNode, before: Node)
+proc insertData*(n: Node, position: int, data: cstring)
+proc removeAttribute*(n: Node, attr: cstring)
+proc removeAttributeNode*(n, attr: Node)
+proc removeChild*(n, child: Node)
+proc replaceChild*(n, newNode, oldNode: Node)
+proc replaceData*(n: Node, start, len: int, text: cstring)
+proc scrollIntoView*(n: Node)
+proc setAttribute*(n: Node, name, value: cstring)
+proc setAttributeNode*(n: Node, attr: Node)
+
+# Document "methods"
+proc captureEvents*(d: Document, eventMask: int) {.deprecated.}
+proc createAttribute*(d: Document, identifier: cstring): Node
+proc createElement*(d: Document, identifier: cstring): Element
+proc createTextNode*(d: Document, identifier: cstring): Node
+proc getElementById*(d: Document, id: cstring): Element
+proc getElementsByName*(d: Document, name: cstring): seq[Element]
+proc getElementsByTagName*(d: Document, name: cstring): seq[Element]
+proc getElementsByClassName*(d: Document, name: cstring): seq[Element]
+proc getSelection*(d: Document): cstring
+proc handleEvent*(d: Document, event: Event)
+proc open*(d: Document)
+proc releaseEvents*(d: Document, eventMask: int) {.deprecated.}
+proc routeEvent*(d: Document, event: Event)
+proc write*(d: Document, text: cstring)
+proc writeln*(d: Document, text: cstring)
+
+# Element "methods"
+proc blur*(e: Element)
+proc click*(e: Element)
+proc focus*(e: Element)
+proc handleEvent*(e: Element, event: Event)
+proc select*(e: Element)
+proc getElementsByTagName*(e: Element, name: cstring): seq[Element]
+proc getElementsByClassName*(e: Element, name: cstring): seq[Element]
+
+# FormElement "methods"
+proc reset*(f: FormElement)
+proc submit*(f: FormElement)
+
+# EmbedElement "methods"
+proc play*(e: EmbedElement)
+proc stop*(e: EmbedElement)
+
+# Location "methods"
+proc reload*(loc: Location)
+proc replace*(loc: Location, s: cstring)
+
+# History "methods"
+proc back*(h: History)
+proc forward*(h: History)
+proc go*(h: History, pagesToJump: int)
+
+# Navigator "methods"
+proc javaEnabled*(h: Navigator): bool
+
+# ClassList "methods"
+proc add*(c: ClassList, class: cstring)
+proc remove*(c: ClassList, class: cstring)
+proc contains*(c: ClassList, class: cstring):bool
+proc toggle*(c: ClassList, class: cstring)
+
+# Style "methods"
+proc getAttribute*(s: Style, attr: cstring, caseSensitive=false): cstring
+proc removeAttribute*(s: Style, attr: cstring, caseSensitive=false)
+proc setAttribute*(s: Style, attr, value: cstring, caseSensitive=false)
+
+{.pop.}
+
 var
-  window* {.importc, nodecl.}: ref TWindow
-  document* {.importc, nodecl.}: ref TDocument
-  navigator* {.importc, nodecl.}: ref TNavigator
-  screen* {.importc, nodecl.}: ref TScreen
+  window* {.importc, nodecl.}: Window
+  document* {.importc, nodecl.}: Document
+  navigator* {.importc, nodecl.}: Navigator
+  screen* {.importc, nodecl.}: Screen
 
 proc decodeURI*(uri: cstring): cstring {.importc, nodecl.}
 proc encodeURI*(uri: cstring): cstring {.importc, nodecl.}
@@ -466,3 +502,26 @@ proc isNaN*(x: BiggestFloat): bool {.importc, nodecl.}
 proc parseFloat*(s: cstring): BiggestFloat {.importc, nodecl.}
 proc parseInt*(s: cstring): int {.importc, nodecl.}
 proc parseInt*(s: cstring, radix: int):int {.importc, nodecl.}
+
+
+type
+  TEventHandlers* {.deprecated.} = EventTargetObj
+  TWindow* {.deprecated.} = WindowObj
+  TFrame* {.deprecated.} = FrameObj
+  TNode* {.deprecated.} = NodeObj
+  TDocument* {.deprecated.} = DocumentObj
+  TElement* {.deprecated.} = ElementObj
+  TLink* {.deprecated.} = LinkObj
+  TEmbed* {.deprecated.} = EmbedObj
+  TAnchor* {.deprecated.} = AnchorObj
+  TOption* {.deprecated.} = OptionObj
+  TForm* {.deprecated.} = FormObj
+  TImage* {.deprecated.} = ImageObj
+  TNodeType* {.deprecated.} = NodeType
+  TEvent* {.deprecated.} = EventObj
+  TLocation* {.deprecated.} = LocationObj
+  THistory* {.deprecated.} = HistoryObj
+  TNavigator* {.deprecated.} = NavigatorObj
+  TStyle* {.deprecated.} = StyleObj
+  TScreen* {.deprecated.} = ScreenObj
+  TApplet* {.importc, deprecated.} = object of RootObj

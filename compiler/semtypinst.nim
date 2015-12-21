@@ -16,9 +16,9 @@ const
 
 proc sharedPtrCheck(info: TLineInfo, t: PType) =
   if t.kind == tyPtr and t.len > 1:
-    if t.sons[0].sym.magic in {mShared, mGuarded}:
+    if t.sons[0].sym.magic == mShared:
       incl(t.flags, tfShared)
-      if t.sons[0].sym.magic == mGuarded: incl(t.flags, tfGuarded)
+      #if t.sons[0].sym.magic == mGuarded: incl(t.flags, tfGuarded)
       if tfHasGCedMem in t.flags or t.isGCedMem:
         localError(info, errGenerated,
                    "shared memory may not refer to GC'ed thread local memory")
@@ -34,9 +34,9 @@ proc checkPartialConstructedType(info: TLineInfo, t: PType) =
 proc checkConstructedType*(info: TLineInfo, typ: PType) =
   var t = typ.skipTypes({tyDistinct})
   if t.kind in tyTypeClasses: discard
-  elif tfAcyclic in t.flags and skipTypes(t, abstractInst).kind != tyObject: 
+  elif tfAcyclic in t.flags and skipTypes(t, abstractInst).kind != tyObject:
     localError(info, errInvalidPragmaX, "acyclic")
-  elif t.kind == tyVar and t.sons[0].kind == tyVar: 
+  elif t.kind == tyVar and t.sons[0].kind == tyVar:
     localError(info, errVarVarTypeNotAllowed)
   elif computeSize(t) == szIllegalRecursion:
     localError(info, errIllegalRecursionInTypeX, typeToString(t))
@@ -44,7 +44,7 @@ proc checkConstructedType*(info: TLineInfo, typ: PType) =
     sharedPtrCheck(info, t)
   when false:
     if t.kind == tyObject and t.sons[0] != nil:
-      if t.sons[0].kind != tyObject or tfFinal in t.sons[0].flags: 
+      if t.sons[0].kind != tyObject or tfFinal in t.sons[0].flags:
         localError(info, errInheritanceOnlyWithNonFinalObjects)
 
 proc searchInstTypes*(key: PType): PType =
@@ -69,17 +69,21 @@ proc searchInstTypes*(key: PType): PType =
         if not compareTypes(inst.sons[j], key.sons[j],
                             flags = {ExactGenericParams}):
           break matchType
-       
+
       return inst
 
 proc cacheTypeInst*(inst: PType) =
   # XXX: add to module's generics
   #      update the refcount
-  let genericTyp = inst.sons[0]
-  genericTyp.sym.typeInstCache.safeAdd(inst)
+  let gt = inst.sons[0]
+  let t = if gt.kind == tyGenericBody: gt.lastSon else: gt
+  if t.kind in {tyStatic, tyGenericParam} + tyTypeClasses:
+    return
+  gt.sym.typeInstCache.safeAdd(inst)
+
 
 type
-  TReplTypeVars* {.final.} = object 
+  TReplTypeVars* {.final.} = object
     c*: PContext
     typeMap*: TIdTable        # map PType to PType
     symMap*: TIdTable         # map PSym to PSym
@@ -89,6 +93,9 @@ type
     info*: TLineInfo
     allowMetaTypes*: bool     # allow types such as seq[Number]
                               # i.e. the result contains unresolved generics
+    skipTypedesc*: bool       # wether we should skip typeDescs
+    owner*: PSym              # where this instantiation comes from
+    recursionLimit: int
 
 proc replaceTypeVarsTAux(cl: var TReplTypeVars, t: PType): PType
 proc replaceTypeVarsS(cl: var TReplTypeVars, s: PSym): PSym
@@ -151,7 +158,7 @@ proc reResolveCallsWithTypedescParams(cl: var TReplTypeVars, n: PNode): PNode =
     if needsFixing:
       n.sons[0] = newSymNode(n.sons[0].sym.owner)
       return cl.c.semOverloadedCall(cl.c, n, n, {skProc})
-  
+
   for i in 0 .. <n.safeLen:
     n.sons[i] = reResolveCallsWithTypedescParams(cl, n[i])
 
@@ -203,18 +210,21 @@ proc replaceTypeVarsN(cl: var TReplTypeVars, n: PNode): PNode =
       newSons(result, length)
       for i in countup(0, length - 1):
         result.sons[i] = replaceTypeVarsN(cl, n.sons[i])
-  
-proc replaceTypeVarsS(cl: var TReplTypeVars, s: PSym): PSym = 
+
+proc replaceTypeVarsS(cl: var TReplTypeVars, s: PSym): PSym =
   if s == nil: return nil
+  # symbol is not our business:
+  if cl.owner != nil and s.owner != cl.owner:
+    return s
   result = PSym(idTableGet(cl.symMap, s))
-  if result == nil: 
+  if result == nil:
     result = copySym(s, false)
     incl(result.flags, sfFromGeneric)
     idTablePut(cl.symMap, s, result)
     result.owner = s.owner
     result.typ = replaceTypeVarsT(cl, s.typ)
     result.ast = replaceTypeVarsN(cl, s.ast)
-    
+
 proc lookupTypeVar(cl: var TReplTypeVars, t: PType): PType =
   result = PType(idTableGet(cl.typeMap, t))
   if result == nil:
@@ -232,9 +242,11 @@ proc instCopyType*(cl: var TReplTypeVars, t: PType): PType =
   # XXX: relying on allowMetaTypes is a kludge
   result = copyType(t, t.owner, cl.allowMetaTypes)
   result.flags.incl tfFromGeneric
-  result.flags.excl tfInstClearedFlags
+  if not (t.kind in tyMetaTypes or
+         (t.kind == tyStatic and t.n == nil)):
+    result.flags.excl tfInstClearedFlags
 
-proc handleGenericInvocation(cl: var TReplTypeVars, t: PType): PType = 
+proc handleGenericInvocation(cl: var TReplTypeVars, t: PType): PType =
   # tyGenericInvocation[A, tyGenericInvocation[A, B]]
   # is difficult to handle:
   var body = t.sons[0]
@@ -256,7 +268,7 @@ proc handleGenericInvocation(cl: var TReplTypeVars, t: PType): PType =
         propagateToOwner(header, x)
     else:
       propagateToOwner(header, x)
-  
+
   if header != t:
     # search again after first pass:
     result = searchInstTypes(header)
@@ -276,19 +288,22 @@ proc handleGenericInvocation(cl: var TReplTypeVars, t: PType): PType =
   else:
     idTablePut(cl.localCache, t, result)
 
+  let oldSkipTypedesc = cl.skipTypedesc
+  cl.skipTypedesc = true
   for i in countup(1, sonsLen(t) - 1):
     var x = replaceTypeVarsT(cl, t.sons[i])
     assert x.kind != tyGenericInvocation
     header.sons[i] = x
     propagateToOwner(header, x)
     idTablePut(cl.typeMap, body.sons[i-1], x)
-  
+
   for i in countup(1, sonsLen(t) - 1):
     # if one of the params is not concrete, we cannot do anything
     # but we already raised an error!
     rawAddSon(result, header.sons[i])
 
   var newbody = replaceTypeVarsT(cl, lastSon(body))
+  cl.skipTypedesc = oldSkipTypedesc
   newbody.flags = newbody.flags + (t.flags + body.flags - tfInstClearedFlags)
   result.flags = result.flags + newbody.flags - tfInstClearedFlags
   # This is actually wrong: tgeneric_closure fails with this line:
@@ -303,14 +318,20 @@ proc handleGenericInvocation(cl: var TReplTypeVars, t: PType): PType =
   if dc != nil and sfFromGeneric notin newbody.deepCopy.flags:
     # 'deepCopy' needs to be instantiated for
     # generics *when the type is constructed*:
-    newbody.deepCopy = cl.c.instDeepCopy(cl.c, dc, result, cl.info)
+    newbody.deepCopy = cl.c.instTypeBoundOp(cl.c, dc, result, cl.info,
+                                            attachedDeepCopy)
+  let asgn = newbody.assignment
+  if asgn != nil and sfFromGeneric notin asgn.flags:
+    # '=' needs to be instantiated for generics when the type is constructed:
+    newbody.assignment = cl.c.instTypeBoundOp(cl.c, asgn, result, cl.info,
+                                              attachedAsgn)
 
 proc eraseVoidParams*(t: PType) =
   # transform '(): void' into '()' because old parts of the compiler really
   # don't deal with '(): void':
   if t.sons[0] != nil and t.sons[0].kind == tyEmpty:
     t.sons[0] = nil
-  
+
   for i in 1 .. <t.sonsLen:
     # don't touch any memory unless necessary
     if t.sons[i].kind == tyEmpty:
@@ -332,7 +353,7 @@ proc skipIntLiteralParams*(t: PType) =
     if skipped != p:
       t.sons[i] = skipped
       if i > 0: t.n.sons[i].sym.typ = skipped
-  
+
   # when the typeof operator is used on a static input
   # param, the results gets infected with static as well:
   if t.sons[0] != nil and t.sons[0].kind == tyStatic:
@@ -353,13 +374,26 @@ proc propagateFieldFlags(t: PType, n: PNode) =
   else: discard
 
 proc replaceTypeVarsTAux(cl: var TReplTypeVars, t: PType): PType =
+  template bailout =
+    if cl.recursionLimit > 100:
+      # bail out, see bug #2509. But note this caching is in general wrong,
+      # look at this example where TwoVectors should not share the generic
+      # instantiations (bug #3112):
+
+      # type
+      #   Vector[N: static[int]] = array[N, float64]
+      #   TwoVectors[Na, Nb: static[int]] = (Vector[Na], Vector[Nb])
+      result = PType(idTableGet(cl.localCache, t))
+      if result != nil: return result
+    inc cl.recursionLimit
+
   result = t
   if t == nil: return
 
-  if t.kind in {tyStatic, tyGenericParam, tyIter} + tyTypeClasses:
+  if t.kind in {tyStatic, tyGenericParam} + tyTypeClasses:
     let lookup = PType(idTableGet(cl.typeMap, t))
     if lookup != nil: return lookup
-  
+
   case t.kind
   of tyGenericInvocation:
     result = handleGenericInvocation(cl, t)
@@ -373,7 +407,8 @@ proc replaceTypeVarsTAux(cl: var TReplTypeVars, t: PType): PType =
     if cl.allowMetaTypes: return
     assert t.n.typ != t
     var n = prepareNode(cl, t.n)
-    n = cl.c.semConstExpr(cl.c, n)
+    if n.kind != nkEmpty:
+      n = cl.c.semConstExpr(cl.c, n)
     if n.typ.kind == tyTypeDesc:
       # XXX: sometimes, chained typedescs enter here.
       # It may be worth investigating why this is happening,
@@ -394,66 +429,89 @@ proc replaceTypeVarsTAux(cl: var TReplTypeVars, t: PType): PType =
 
   of tyInt, tyFloat:
     result = skipIntLit(t)
-  
+
   of tyTypeDesc:
     let lookup = PType(idTableGet(cl.typeMap, t)) # lookupTypeVar(cl, t)
     if lookup != nil:
       result = lookup
-      if tfUnresolved in t.flags: result = result.base
+      if tfUnresolved in t.flags or cl.skipTypedesc: result = result.base
     elif t.sons[0].kind != tyNone:
       result = makeTypeDesc(cl.c, replaceTypeVarsT(cl, t.sons[0]))
- 
+
   of tyUserTypeClass:
     result = t
 
   of tyGenericInst:
+    bailout()
     result = instCopyType(cl, t)
+    idTablePut(cl.localCache, t, result)
     for i in 1 .. <result.sonsLen:
       result.sons[i] = replaceTypeVarsT(cl, result.sons[i])
     propagateToOwner(result, result.lastSon)
-  
+
   else:
     if containsGenericType(t):
+      #if not cl.allowMetaTypes:
+      bailout()
       result = instCopyType(cl, t)
       result.size = -1 # needs to be recomputed
-      
+      #if not cl.allowMetaTypes:
+      idTablePut(cl.localCache, t, result)
+
       for i in countup(0, sonsLen(result) - 1):
         if result.sons[i] != nil:
-          result.sons[i] = replaceTypeVarsT(cl, result.sons[i])
-          propagateToOwner(result, result.sons[i])
+          var r = replaceTypeVarsT(cl, result.sons[i])
+          if result.kind == tyObject:
+            # carefully coded to not skip the precious tyGenericInst:
+            let r2 = r.skipTypes({tyGenericInst})
+            if r2.kind in {tyPtr, tyRef}:
+              r = skipTypes(r2, {tyPtr, tyRef})
+          result.sons[i] = r
+          propagateToOwner(result, r)
 
       result.n = replaceTypeVarsN(cl, result.n)
-     
+
       case result.kind
       of tyArray:
         let idx = result.sons[0]
         internalAssert idx.kind != tyStatic
-       
+
       of tyObject, tyTuple:
         propagateFieldFlags(result, result.n)
-      
+
       of tyProc:
         eraseVoidParams(result)
         skipIntLiteralParams(result)
-      
+
       else: discard
 
-proc initTypeVars*(p: PContext, pt: TIdTable, info: TLineInfo): TReplTypeVars =
+proc initTypeVars*(p: PContext, pt: TIdTable, info: TLineInfo;
+                   owner: PSym): TReplTypeVars =
   initIdTable(result.symMap)
   copyIdTable(result.typeMap, pt)
   initIdTable(result.localCache)
   result.info = info
   result.c = p
+  result.owner = owner
 
-proc replaceTypesInBody*(p: PContext, pt: TIdTable, n: PNode): PNode =
-  var cl = initTypeVars(p, pt, n.info)
+proc replaceTypesInBody*(p: PContext, pt: TIdTable, n: PNode;
+                         owner: PSym): PNode =
+  var cl = initTypeVars(p, pt, n.info, owner)
   pushInfoContext(n.info)
   result = replaceTypeVarsN(cl, n)
   popInfoContext()
-  
+
+proc replaceTypesForLambda*(p: PContext, pt: TIdTable, n: PNode;
+                            original, new: PSym): PNode =
+  var cl = initTypeVars(p, pt, n.info, original)
+  idTablePut(cl.symMap, original, new)
+  pushInfoContext(n.info)
+  result = replaceTypeVarsN(cl, n)
+  popInfoContext()
+
 proc generateTypeInstance*(p: PContext, pt: TIdTable, info: TLineInfo,
                            t: PType): PType =
-  var cl = initTypeVars(p, pt, info)
+  var cl = initTypeVars(p, pt, info, nil)
   pushInfoContext(info)
   result = replaceTypeVarsT(cl, t)
   popInfoContext()

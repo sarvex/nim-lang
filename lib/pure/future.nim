@@ -12,7 +12,7 @@
 
 import macros
 
-proc createProcType(p, b: PNimrodNode): PNimrodNode {.compileTime.} =
+proc createProcType(p, b: NimNode): NimNode {.compileTime.} =
   #echo treeRepr(p)
   #echo treeRepr(b)
   result = newNimNode(nnkProcTy)
@@ -44,7 +44,7 @@ proc createProcType(p, b: PNimrodNode): PNimrodNode {.compileTime.} =
     formalParams.add identDefs
   else:
     error("Incorrect type list in proc type declaration.")
-  
+
   result.add formalParams
   result.add newEmptyNode()
   #echo(treeRepr(result))
@@ -59,10 +59,10 @@ macro `=>`*(p, b: expr): expr {.immediate.} =
   ##     f(2, 2)
   ##
   ##   passTwoAndTwo((x, y) => x + y) # 4
-  
+
   #echo treeRepr(p)
   #echo(treeRepr(b))
-  var params: seq[PNimrodNode] = @[newIdentNode("auto")]
+  var params: seq[NimNode] = @[newIdentNode("auto")]
 
   case p.kind
   of nnkPar:
@@ -75,7 +75,7 @@ macro `=>`*(p, b: expr): expr {.immediate.} =
         identDefs.add(newEmptyNode())
       of nnkIdent:
         identDefs.add(c)
-        identDefs.add(newEmptyNode())
+        identDefs.add(newIdentNode("auto"))
         identDefs.add(newEmptyNode())
       of nnkInfix:
         if c[0].kind == nnkIdent and c[0].ident == !"->":
@@ -93,7 +93,7 @@ macro `=>`*(p, b: expr): expr {.immediate.} =
   of nnkIdent:
     var identDefs = newNimNode(nnkIdentDefs)
     identDefs.add(p)
-    identDefs.add(newEmptyNode())
+    identDefs.add(newIdentNode("auto"))
     identDefs.add(newEmptyNode())
     params.add(identDefs)
   of nnkInfix:
@@ -118,7 +118,7 @@ macro `->`*(p, b: expr): expr {.immediate.} =
   ##
   ##   proc pass2(f: (float, float) -> float): float =
   ##     f(2, 2)
-  ##   
+  ##
   ##   # is the same as:
   ##
   ##   proc pass2(f: proc (x, y: float): float): float =

@@ -29,7 +29,7 @@ when not defined(nimhygiene):
 # codes should never be needed, and this can pack more entries per cache-line.
 # Losing hcode entirely is also possible - if some element value is forbidden.
 type
-  KeyValuePair[A] = tuple[hcode: THash, key: A]
+  KeyValuePair[A] = tuple[hcode: Hash, key: A]
   KeyValuePairSeq[A] = seq[KeyValuePair[A]]
   HashSet* {.myShallow.}[A] = object ## \
     ## A generic hash set.
@@ -43,10 +43,10 @@ type
 
 # hcode for real keys cannot be zero.  hcode==0 signifies an empty slot.  These
 # two procs retain clarity of that encoding without the space cost of an enum.
-proc isEmpty(hcode: THash): bool {.inline.} =
+proc isEmpty(hcode: Hash): bool {.inline.} =
   result = hcode == 0
 
-proc isFilled(hcode: THash): bool {.inline.} =
+proc isFilled(hcode: Hash): bool {.inline.} =
   result = hcode != 0
 
 proc isValid*[A](s: HashSet[A]): bool =
@@ -58,7 +58,7 @@ proc isValid*[A](s: HashSet[A]): bool =
   ## initialized. Example:
   ##
   ## .. code-block ::
-  ##   proc savePreferences(options: TSet[string]) =
+  ##   proc savePreferences(options: Set[string]) =
   ##     assert options.isValid, "Pass an initialized set!"
   ##     # Do stuff here, may crash in release builds!
   result = not s.data.isNil
@@ -72,7 +72,7 @@ proc len*[A](s: HashSet[A]): int =
   ##
   ## .. code-block::
   ##
-  ##   var values: TSet[int]
+  ##   var values: Set[int]
   ##   assert(not values.isValid)
   ##   assert values.len == 0
   result = s.counter
@@ -114,7 +114,7 @@ proc mustRehash(length, counter: int): bool {.inline.} =
   assert(length > counter)
   result = (length * 2 < counter * 3) or (length - counter < 4)
 
-proc rightSize*(count: int): int {.inline.} =
+proc rightSize*(count: Natural): int {.inline.} =
   ## Return the value of `initialSize` to support `count` items.
   ##
   ## If more items are expected to be added, simply add that
@@ -123,15 +123,15 @@ proc rightSize*(count: int): int {.inline.} =
   ## Internally, we want mustRehash(rightSize(x), x) == false.
   result = nextPowerOfTwo(count * 3 div 2  +  4)
 
-proc nextTry(h, maxHash: THash): THash {.inline.} =
+proc nextTry(h, maxHash: Hash): Hash {.inline.} =
   result = (h + 1) and maxHash
 
 template rawGetKnownHCImpl() {.dirty.} =
-  var h: THash = hc and high(s.data)  # start with real hash value
+  var h: Hash = hc and high(s.data)  # start with real hash value
   while isFilled(s.data[h].hcode):
     # Compare hc THEN key with boolean short circuit. This makes the common case
     # zero ==key's for missing (e.g.inserts) and exactly one ==key for present.
-    # It does slow down succeeding lookups by one extra THash cmp&and..usually
+    # It does slow down succeeding lookups by one extra Hash cmp&and..usually
     # just a few clock cycles, generally worth it for any non-integer-like A.
     if s.data[h].hcode == hc and s.data[h].key == key:  # compare hc THEN key
       return h
@@ -148,22 +148,29 @@ template rawInsertImpl() {.dirty.} =
   data[h].key = key
   data[h].hcode = hc
 
-proc rawGetKnownHC[A](s: HashSet[A], key: A, hc: THash): int {.inline.} =
+proc rawGetKnownHC[A](s: HashSet[A], key: A, hc: Hash): int {.inline.} =
   rawGetKnownHCImpl()
 
-proc rawGet[A](s: HashSet[A], key: A, hc: var THash): int {.inline.} =
+proc rawGet[A](s: HashSet[A], key: A, hc: var Hash): int {.inline.} =
   rawGetImpl()
 
-proc mget*[A](s: var HashSet[A], key: A): var A =
+proc `[]`*[A](s: var HashSet[A], key: A): var A =
   ## returns the element that is actually stored in 's' which has the same
-  ## value as 'key' or raises the ``EInvalidKey`` exception. This is useful
+  ## value as 'key' or raises the ``KeyError`` exception. This is useful
   ## when one overloaded 'hash' and '==' but still needs reference semantics
   ## for sharing.
   assert s.isValid, "The set needs to be initialized."
-  var hc: THash
+  var hc: Hash
   var index = rawGet(s, key, hc)
   if index >= 0: result = s.data[index].key
   else: raise newException(KeyError, "key not found: " & $key)
+
+proc mget*[A](s: var HashSet[A], key: A): var A {.deprecated.} =
+  ## returns the element that is actually stored in 's' which has the same
+  ## value as 'key' or raises the ``KeyError`` exception. This is useful
+  ## when one overloaded 'hash' and '==' but still needs reference semantics
+  ## for sharing. Use ```[]``` instead.
+  s[key]
 
 proc contains*[A](s: HashSet[A], key: A): bool =
   ## Returns true iff `key` is in `s`.
@@ -178,12 +185,12 @@ proc contains*[A](s: HashSet[A], key: A): bool =
   ##   values.excl(2)
   ##   assert(not values.contains(2))
   assert s.isValid, "The set needs to be initialized."
-  var hc: THash
+  var hc: Hash
   var index = rawGet(s, key, hc)
   result = index >= 0
 
 proc rawInsert[A](s: var HashSet[A], data: var KeyValuePairSeq[A], key: A,
-                  hc: THash, h: THash) =
+                  hc: Hash, h: Hash) =
   rawInsertImpl()
 
 proc enlarge[A](s: var HashSet[A]) =
@@ -196,7 +203,7 @@ proc enlarge[A](s: var HashSet[A]) =
       rawInsert(s, s.data, n[i].key, n[i].hcode, j)
 
 template inclImpl() {.dirty.} =
-  var hc: THash
+  var hc: Hash
   var index = rawGet(s, key, hc)
   if index < 0:
     if mustRehash(len(s.data), s.counter):
@@ -206,7 +213,7 @@ template inclImpl() {.dirty.} =
     inc(s.counter)
 
 template containsOrInclImpl() {.dirty.} =
-  var hc: THash
+  var hc: Hash
   var index = rawGet(s, key, hc)
   if index >= 0:
     result = true
@@ -261,7 +268,7 @@ proc excl*[A](s: var HashSet[A], key: A) =
   ##   s.excl(2)
   ##   assert s.len == 3
   assert s.isValid, "The set needs to be initialized."
-  var hc: THash
+  var hc: Hash
   var i = rawGet(s, key, hc)
   var msk = high(s.data)
   if i >= 0:
@@ -323,7 +330,7 @@ proc init*[A](s: var HashSet[A], initialSize=64) =
   ## existing values and calling `excl() <#excl,TSet[A],A>`_ on them. Example:
   ##
   ## .. code-block ::
-  ##   var a: TSet[int]
+  ##   var a: Set[int]
   ##   a.init(4)
   ##   a.incl(2)
   ##   a.init
@@ -552,7 +559,7 @@ proc map*[A, B](data: HashSet[A], op: proc (x: A): B {.closure.}): HashSet[B] =
 
 type
   OrderedKeyValuePair[A] = tuple[
-    hcode: THash, next: int, key: A]
+    hcode: Hash, next: int, key: A]
   OrderedKeyValuePairSeq[A] = seq[OrderedKeyValuePair[A]]
   OrderedSet* {.myShallow.}[A] = object ## \
     ## A generic hash set that remembers insertion order.
@@ -574,7 +581,7 @@ proc isValid*[A](s: OrderedSet[A]): bool =
   ## correctly initialized. Example:
   ##
   ## .. code-block::
-  ##   proc saveTarotCards(cards: TOrderedSet[int]) =
+  ##   proc saveTarotCards(cards: OrderedSet[int]) =
   ##     assert cards.isValid, "Pass an initialized set!"
   ##     # Do stuff here, may crash in release builds!
   result = not s.data.isNil
@@ -588,7 +595,7 @@ proc len*[A](s: OrderedSet[A]): int {.inline.} =
   ##
   ## .. code-block::
   ##
-  ##   var values: TOrderedSet[int]
+  ##   var values: OrderedSet[int]
   ##   assert(not values.isValid)
   ##   assert values.len == 0
   result = s.counter
@@ -629,10 +636,10 @@ iterator items*[A](s: OrderedSet[A]): A =
   forAllOrderedPairs:
     yield s.data[h].key
 
-proc rawGetKnownHC[A](s: OrderedSet[A], key: A, hc: THash): int {.inline.} =
+proc rawGetKnownHC[A](s: OrderedSet[A], key: A, hc: Hash): int {.inline.} =
   rawGetKnownHCImpl()
 
-proc rawGet[A](s: OrderedSet[A], key: A, hc: var THash): int {.inline.} =
+proc rawGet[A](s: OrderedSet[A], key: A, hc: var Hash): int {.inline.} =
   rawGetImpl()
 
 proc contains*[A](s: OrderedSet[A], key: A): bool =
@@ -646,12 +653,12 @@ proc contains*[A](s: OrderedSet[A], key: A): bool =
   ##   values.incl(2)
   ##   assert values.contains(2)
   assert s.isValid, "The set needs to be initialized."
-  var hc: THash
+  var hc: Hash
   var index = rawGet(s, key, hc)
   result = index >= 0
 
 proc rawInsert[A](s: var OrderedSet[A], data: var OrderedKeyValuePairSeq[A],
-                  key: A, hc: THash, h: THash) =
+                  key: A, hc: Hash, h: Hash) =
   rawInsertImpl()
   data[h].next = -1
   if s.first < 0: s.first = h
@@ -729,7 +736,7 @@ proc init*[A](s: var OrderedSet[A], initialSize=64) =
   ## from an ordered hash set. Example:
   ##
   ## .. code-block ::
-  ##   var a: TOrderedSet[int]
+  ##   var a: OrderedSet[int]
   ##   a.init(4)
   ##   a.incl(2)
   ##   a.init
@@ -798,177 +805,179 @@ proc `==`*[A](s, t: OrderedSet[A]): bool =
     g = nxg
   result = compared == s.counter
 
-proc testModule() =
-  ## Internal micro test to validate docstrings and such.
-  block isValidTest:
-    var options: HashSet[string]
-    proc savePreferences(options: HashSet[string]) =
-      assert options.isValid, "Pass an initialized set!"
-    options = initSet[string]()
-    options.savePreferences
+when isMainModule and not defined(release):
+  proc testModule() =
+    ## Internal micro test to validate docstrings and such.
+    block isValidTest:
+      var options: HashSet[string]
+      proc savePreferences(options: HashSet[string]) =
+        assert options.isValid, "Pass an initialized set!"
+      options = initSet[string]()
+      options.savePreferences
 
-  block lenTest:
-    var values: HashSet[int]
-    assert(not values.isValid)
-    assert values.len == 0
-    assert values.card == 0
+    block lenTest:
+      var values: HashSet[int]
+      assert(not values.isValid)
+      assert values.len == 0
+      assert values.card == 0
 
-  block setIterator:
-    type pair = tuple[a, b: int]
-    var a, b = initSet[pair]()
-    a.incl((2, 3))
-    a.incl((3, 2))
-    a.incl((2, 3))
-    for x, y in a.items:
-      b.incl((x - 2, y + 1))
-    assert a.len == b.card
-    assert a.len == 2
-    #echo b
+    block setIterator:
+      type pair = tuple[a, b: int]
+      var a, b = initSet[pair]()
+      a.incl((2, 3))
+      a.incl((3, 2))
+      a.incl((2, 3))
+      for x, y in a.items:
+        b.incl((x - 2, y + 1))
+      assert a.len == b.card
+      assert a.len == 2
+      #echo b
 
-  block setContains:
-    var values = initSet[int]()
-    assert(not values.contains(2))
-    values.incl(2)
-    assert values.contains(2)
-    values.excl(2)
-    assert(not values.contains(2))
+    block setContains:
+      var values = initSet[int]()
+      assert(not values.contains(2))
+      values.incl(2)
+      assert values.contains(2)
+      values.excl(2)
+      assert(not values.contains(2))
 
-    values.incl(4)
-    var others = toSet([6, 7])
-    values.incl(others)
-    assert values.len == 3
+      values.incl(4)
+      var others = toSet([6, 7])
+      values.incl(others)
+      assert values.len == 3
 
-    values.init
-    assert values.containsOrIncl(2) == false
-    assert values.containsOrIncl(2) == true
-    var
-      a = toSet([1, 2])
-      b = toSet([1])
-    b.incl(2)
-    assert a == b
+      values.init
+      assert values.containsOrIncl(2) == false
+      assert values.containsOrIncl(2) == true
+      var
+        a = toSet([1, 2])
+        b = toSet([1])
+      b.incl(2)
+      assert a == b
 
-  block exclusions:
-    var s = toSet([2, 3, 6, 7])
-    s.excl(2)
-    s.excl(2)
-    assert s.len == 3
+    block exclusions:
+      var s = toSet([2, 3, 6, 7])
+      s.excl(2)
+      s.excl(2)
+      assert s.len == 3
 
-    var
-      numbers = toSet([1, 2, 3, 4, 5])
-      even = toSet([2, 4, 6, 8])
-    numbers.excl(even)
-    #echo numbers
-    # --> {1, 3, 5}
+      var
+        numbers = toSet([1, 2, 3, 4, 5])
+        even = toSet([2, 4, 6, 8])
+      numbers.excl(even)
+      #echo numbers
+      # --> {1, 3, 5}
 
-  block toSeqAndString:
-    var a = toSet([2, 4, 5])
-    var b = initSet[int]()
-    for x in [2, 4, 5]: b.incl(x)
-    assert($a == $b)
-    #echo a
-    #echo toSet(["no", "esc'aping", "is \" provided"])
+    block toSeqAndString:
+      var a = toSet([2, 4, 5])
+      var b = initSet[int]()
+      for x in [2, 4, 5]: b.incl(x)
+      assert($a == $b)
+      #echo a
+      #echo toSet(["no", "esc'aping", "is \" provided"])
 
-  #block orderedToSeqAndString:
-  #  echo toOrderedSet([2, 4, 5])
-  #  echo toOrderedSet(["no", "esc'aping", "is \" provided"])
+    #block orderedToSeqAndString:
+    #  echo toOrderedSet([2, 4, 5])
+    #  echo toOrderedSet(["no", "esc'aping", "is \" provided"])
 
-  block setOperations:
-    var
-      a = toSet(["a", "b"])
-      b = toSet(["b", "c"])
-      c = union(a, b)
-    assert c == toSet(["a", "b", "c"])
-    var d = intersection(a, b)
-    assert d == toSet(["b"])
-    var e = difference(a, b)
-    assert e == toSet(["a"])
-    var f = symmetricDifference(a, b)
-    assert f == toSet(["a", "c"])
-    assert d < a and d < b
-    assert((a < a) == false)
-    assert d <= a and d <= b
-    assert((a <= a))
-    # Alias test.
-    assert a + b == toSet(["a", "b", "c"])
-    assert a * b == toSet(["b"])
-    assert a - b == toSet(["a"])
-    assert a -+- b == toSet(["a", "c"])
-    assert disjoint(a, b) == false
-    assert disjoint(a, b - a) == true
+    block setOperations:
+      var
+        a = toSet(["a", "b"])
+        b = toSet(["b", "c"])
+        c = union(a, b)
+      assert c == toSet(["a", "b", "c"])
+      var d = intersection(a, b)
+      assert d == toSet(["b"])
+      var e = difference(a, b)
+      assert e == toSet(["a"])
+      var f = symmetricDifference(a, b)
+      assert f == toSet(["a", "c"])
+      assert d < a and d < b
+      assert((a < a) == false)
+      assert d <= a and d <= b
+      assert((a <= a))
+      # Alias test.
+      assert a + b == toSet(["a", "b", "c"])
+      assert a * b == toSet(["b"])
+      assert a - b == toSet(["a"])
+      assert a -+- b == toSet(["a", "c"])
+      assert disjoint(a, b) == false
+      assert disjoint(a, b - a) == true
 
-  block mapSet:
-    var a = toSet([1, 2, 3])
-    var b = a.map(proc (x: int): string = $x)
-    assert b == toSet(["1", "2", "3"])
+    block mapSet:
+      var a = toSet([1, 2, 3])
+      var b = a.map(proc (x: int): string = $x)
+      assert b == toSet(["1", "2", "3"])
 
-  block isValidTest:
-    var cards: OrderedSet[string]
-    proc saveTarotCards(cards: OrderedSet[string]) =
-      assert cards.isValid, "Pass an initialized set!"
-    cards = initOrderedSet[string]()
-    cards.saveTarotCards
+    block isValidTest:
+      var cards: OrderedSet[string]
+      proc saveTarotCards(cards: OrderedSet[string]) =
+        assert cards.isValid, "Pass an initialized set!"
+      cards = initOrderedSet[string]()
+      cards.saveTarotCards
 
-  block lenTest:
-    var values: OrderedSet[int]
-    assert(not values.isValid)
-    assert values.len == 0
-    assert values.card == 0
+    block lenTest:
+      var values: OrderedSet[int]
+      assert(not values.isValid)
+      assert values.len == 0
+      assert values.card == 0
 
-  block setIterator:
-    type pair = tuple[a, b: int]
-    var a, b = initOrderedSet[pair]()
-    a.incl((2, 3))
-    a.incl((3, 2))
-    a.incl((2, 3))
-    for x, y in a.items:
-      b.incl((x - 2, y + 1))
-    assert a.len == b.card
-    assert a.len == 2
+    block setIterator:
+      type pair = tuple[a, b: int]
+      var a, b = initOrderedSet[pair]()
+      a.incl((2, 3))
+      a.incl((3, 2))
+      a.incl((2, 3))
+      for x, y in a.items:
+        b.incl((x - 2, y + 1))
+      assert a.len == b.card
+      assert a.len == 2
 
-  #block orderedSetIterator:
-  #  var a = initOrderedSet[int]()
-  #  for value in [9, 2, 1, 5, 1, 8, 4, 2]:
-  #    a.incl(value)
-  #  for value in a.items:
-  #    echo "Got ", value
+    #block orderedSetIterator:
+    #  var a = initOrderedSet[int]()
+    #  for value in [9, 2, 1, 5, 1, 8, 4, 2]:
+    #    a.incl(value)
+    #  for value in a.items:
+    #    echo "Got ", value
 
-  block setContains:
-    var values = initOrderedSet[int]()
-    assert(not values.contains(2))
-    values.incl(2)
-    assert values.contains(2)
+    block setContains:
+      var values = initOrderedSet[int]()
+      assert(not values.contains(2))
+      values.incl(2)
+      assert values.contains(2)
 
-  block toSeqAndString:
-    var a = toOrderedSet([2, 4, 5])
-    var b = initOrderedSet[int]()
-    for x in [2, 4, 5]: b.incl(x)
-    assert($a == $b)
-    assert(a == b) # https://github.com/Araq/Nimrod/issues/1413
+    block toSeqAndString:
+      var a = toOrderedSet([2, 4, 5])
+      var b = initOrderedSet[int]()
+      for x in [2, 4, 5]: b.incl(x)
+      assert($a == $b)
+      assert(a == b) # https://github.com/Araq/Nimrod/issues/1413
 
-  block initBlocks:
-    var a: OrderedSet[int]
-    a.init(4)
-    a.incl(2)
-    a.init
-    assert a.len == 0 and a.isValid
-    a = initOrderedSet[int](4)
-    a.incl(2)
-    assert a.len == 1
+    block initBlocks:
+      var a: OrderedSet[int]
+      a.init(4)
+      a.incl(2)
+      a.init
+      assert a.len == 0 and a.isValid
+      a = initOrderedSet[int](4)
+      a.incl(2)
+      assert a.len == 1
 
-    var b: HashSet[int]
-    b.init(4)
-    b.incl(2)
-    b.init
-    assert b.len == 0 and b.isValid
-    b = initSet[int](4)
-    b.incl(2)
-    assert b.len == 1
+      var b: HashSet[int]
+      b.init(4)
+      b.incl(2)
+      b.init
+      assert b.len == 0 and b.isValid
+      b = initSet[int](4)
+      b.incl(2)
+      assert b.len == 1
 
-  for i in 0 .. 32:
-    var s = rightSize(i)
-    if s <= i or mustRehash(s, i):
-      echo "performance issue: rightSize() will not elide enlarge() at ", i
+    for i in 0 .. 32:
+      var s = rightSize(i)
+      if s <= i or mustRehash(s, i):
+        echo "performance issue: rightSize() will not elide enlarge() at ", i
 
-  echo "Micro tests run successfully."
+    when not defined(testing):
+      echo "Micro tests run successfully."
 
-when isMainModule and not defined(release): testModule()
+  testModule()

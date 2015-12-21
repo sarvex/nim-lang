@@ -7,7 +7,7 @@ type
 
 {.deprecated: [TMersenneTwister: MersenneTwister].}
 
-proc newMersenneTwister*(seed: int): MersenneTwister =   
+proc newMersenneTwister*(seed: int): MersenneTwister =
   result.index = 0
   result.mt[0]= uint32(seed)
   for i in 1..623'u32:
@@ -32,7 +32,7 @@ proc getNum*(m: var MersenneTwister): int =
   return int(y)
 
 # Test
-when isMainModule:
+when not defined(testing) and isMainModule:
   var mt = newMersenneTwister(2525)
 
   for i in 0..99:

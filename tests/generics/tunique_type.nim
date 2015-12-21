@@ -20,14 +20,14 @@ import strutils
 # This serves the same purpose as D's `alias` parameters for types, used heavily
 # in its popular `ranges` and `algorithm` modules.
 
-var exprNodes {.compileTime.} = newSeq[PNimrodNode]()
+var exprNodes {.compileTime.} = newSeq[NimNode]()
 
-proc refExpr(exprNode: PNimrodNode): string {.compileTime.} =
+proc refExpr(exprNode: NimNode): string {.compileTime.} =
   exprNodes.add exprNode.copy
   "expr" & $(exprNodes.len - 1)
 
-proc derefExpr(exprRef: string): PNimrodNode {.compileTime.} =
-  exprNodes[parseInt(exprRef[4 .. -1])]
+proc derefExpr(exprRef: string): NimNode {.compileTime.} =
+  exprNodes[parseInt(exprRef[4 .. ^1])]
 
 #===============================================================================
 # Define a type that allows a callable expression to be mapped onto elements

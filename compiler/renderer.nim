@@ -31,6 +31,7 @@ type
     buf*: string
     pendingNL*: int        # negative if not active; else contains the
                            # indentation value
+    pendingWhitespace: int
     comStack*: seq[PNode]  # comment stack
     flags*: TRenderFlags
     checkAnon: bool        # we're in a context that can contain sfAnon
@@ -83,6 +84,7 @@ proc initSrcGen(g: var TSrcGen, renderFlags: TRenderFlags) =
   g.buf = ""
   g.flags = renderFlags
   g.pendingNL = -1
+  g.pendingWhitespace = -1
   g.checkAnon = false
 
 proc addTok(g: var TSrcGen, kind: TTokType, s: string) =
@@ -97,12 +99,21 @@ proc addPendingNL(g: var TSrcGen) =
     addTok(g, tkSpaces, "\n" & spaces(g.pendingNL))
     g.lineLen = g.pendingNL
     g.pendingNL = - 1
+    g.pendingWhitespace = -1
+  elif g.pendingWhitespace >= 0:
+    addTok(g, tkSpaces, spaces(g.pendingWhitespace))
+    g.pendingWhitespace = -1
 
 proc putNL(g: var TSrcGen, indent: int) =
   if g.pendingNL >= 0: addPendingNL(g)
   else: addTok(g, tkSpaces, "\n")
   g.pendingNL = indent
   g.lineLen = indent
+  g.pendingWhitespace = -1
+
+proc previousNL(g: TSrcGen): bool =
+  result = g.pendingNL >= 0 or (g.tokens.len > 0 and
+                                g.tokens[^1].kind == tkSpaces)
 
 proc putNL(g: var TSrcGen) =
   putNL(g, g.indent)
@@ -127,10 +138,13 @@ proc dedent(g: var TSrcGen) =
     dec(g.lineLen, IndentWidth)
 
 proc put(g: var TSrcGen, kind: TTokType, s: string) =
-  addPendingNL(g)
-  if len(s) > 0:
-    addTok(g, kind, s)
-    inc(g.lineLen, len(s))
+  if kind != tkSpaces:
+    addPendingNL(g)
+    if len(s) > 0:
+      addTok(g, kind, s)
+      inc(g.lineLen, len(s))
+  else:
+    g.pendingWhitespace = s.len
 
 proc putLong(g: var TSrcGen, kind: TTokType, s: string, lineLen: int) =
   # use this for tokens over multiple lines.
@@ -385,7 +399,7 @@ proc lsub(n: PNode): int =
     result = lsub(n.sons[0]) + lcomma(n, 1) + 2
   of nkHiddenStdConv, nkHiddenSubConv, nkHiddenCallConv: result = lsub(n[1])
   of nkCast: result = lsub(n.sons[0]) + lsub(n.sons[1]) + len("cast[]()")
-  of nkAddr: result = lsub(n.sons[0]) + len("addr()")
+  of nkAddr: result = (if n.len>0: lsub(n.sons[0]) + len("addr()") else: 4)
   of nkStaticExpr: result = lsub(n.sons[0]) + len("static_")
   of nkHiddenAddr, nkHiddenDeref: result = lsub(n.sons[0])
   of nkCommand: result = lsub(n.sons[0]) + lcomma(n, 1) + 1
@@ -433,7 +447,7 @@ proc lsub(n: PNode): int =
         len("if_:_")
   of nkElifExpr: result = lsons(n) + len("_elif_:_")
   of nkElseExpr: result = lsub(n.sons[0]) + len("_else:_") # type descriptions
-  of nkTypeOfExpr: result = lsub(n.sons[0]) + len("type_")
+  of nkTypeOfExpr: result = (if n.len > 0: lsub(n.sons[0]) else: 0)+len("type_")
   of nkRefTy: result = (if n.len > 0: lsub(n.sons[0])+1 else: 0) + len("ref")
   of nkPtrTy: result = (if n.len > 0: lsub(n.sons[0])+1 else: 0) + len("ptr")
   of nkVarTy: result = (if n.len > 0: lsub(n.sons[0])+1 else: 0) + len("var")
@@ -503,6 +517,7 @@ proc gsub(g: var TSrcGen, n: PNode) =
 
 proc hasCom(n: PNode): bool =
   result = false
+  if n.isNil: return false
   if n.comment != nil: return true
   case n.kind
   of nkEmpty..nkNilLit: discard
@@ -725,7 +740,7 @@ proc gproc(g: var TSrcGen, n: PNode) =
 proc gTypeClassTy(g: var TSrcGen, n: PNode) =
   var c: TContext
   initContext(c)
-  putWithSpace(g, tkGeneric, "generic")
+  putWithSpace(g, tkConcept, "concept")
   gsons(g, n[0], c) # arglist
   gsub(g, n[1]) # pragmas
   gsub(g, n[2]) # of
@@ -766,7 +781,8 @@ proc gasm(g: var TSrcGen, n: PNode) =
   putWithSpace(g, tkAsm, "asm")
   gsub(g, n.sons[0])
   gcoms(g)
-  gsub(g, n.sons[1])
+  if n.sons.len > 1:
+    gsub(g, n.sons[1])
 
 proc gident(g: var TSrcGen, n: PNode) =
   if g.checkAnon and n.kind == nkSym and sfAnon in n.sym.flags: return
@@ -846,9 +862,10 @@ proc gsub(g: var TSrcGen, n: PNode, c: TContext) =
     put(g, tkParRi, ")")
   of nkAddr:
     put(g, tkAddr, "addr")
-    put(g, tkParLe, "(")
-    gsub(g, n.sons[0])
-    put(g, tkParRi, ")")
+    if n.len > 0:
+      put(g, tkParLe, "(")
+      gsub(g, n.sons[0])
+      put(g, tkParRi, ")")
   of nkStaticExpr:
     put(g, tkStatic, "static")
     put(g, tkSpaces, Space)
@@ -1193,6 +1210,7 @@ proc gsub(g: var TSrcGen, n: PNode, c: TContext) =
     if renderNoPragmas notin g.flags:
       if g.inPragma <= 0:
         inc g.inPragma
+        #if not previousNL(g):
         put(g, tkSpaces, Space)
         put(g, tkCurlyDotLe, "{.")
         gcomma(g, n, emptyContext)
@@ -1269,9 +1287,12 @@ proc gsub(g: var TSrcGen, n: PNode, c: TContext) =
     putWithSpace(g, tkColon, ":")
     gcoms(g)
     gstmts(g, n.sons[0], c)
-  of nkFinally:
+  of nkFinally, nkDefer:
     optNL(g)
-    put(g, tkFinally, "finally")
+    if n.kind == nkFinally:
+      put(g, tkFinally, "finally")
+    else:
+      put(g, tkDefer, "defer")
     putWithSpace(g, tkColon, ":")
     gcoms(g)
     gstmts(g, n.sons[0], c)

@@ -8,7 +8,7 @@
 #
 
 const
-  haveZipLib = defined(unix)
+  haveZipLib = false # zip not in stdlib anymore
 
 when haveZipLib:
   import zipfiles
@@ -35,6 +35,7 @@ type
     actionNsis,   # action: create NSIS installer
     actionScripts # action: create install and deinstall scripts
     actionZip,    # action: create zip file
+    actionXz,     # action: create xz file
     actionDeb     # action: prepare deb package
 
   FileCategory = enum
@@ -171,6 +172,7 @@ proc parseCmdLine(c: var ConfigData) =
           of "csource": incl(c.actions, actionCSource)
           of "scripts": incl(c.actions, actionScripts)
           of "zip": incl(c.actions, actionZip)
+          of "xz": incl(c.actions, actionXz)
           of "inno": incl(c.actions, actionInno)
           of "nsis": incl(c.actions, actionNsis)
           of "deb": incl(c.actions, actionDeb)
@@ -181,10 +183,10 @@ proc parseCmdLine(c: var ConfigData) =
         break
     of cmdLongoption, cmdShortOption:
       case normalize(key.string)
-      of "help", "h": 
+      of "help", "h":
         stdout.write(Usage)
         quit(0)
-      of "version", "v": 
+      of "version", "v":
         stdout.write(Version & "\n")
         quit(0)
       of "o", "output": c.outdir = val
@@ -240,7 +242,7 @@ proc incl(s: var seq[string], x: string): int =
   for i in 0.. <s.len:
     if cmpIgnoreStyle(s[i], x) == 0: return i
   s.add(x)
-  result = s.len-1 
+  result = s.len-1
 
 proc platforms(c: var ConfigData, v: string) =
   for line in splitLines(v):
@@ -277,17 +279,17 @@ proc parseIniFile(c: var ConfigData) =
           of "name": c.name = v
           of "displayname": c.displayName = v
           of "version": c.version = v
-          of "os": 
+          of "os":
             c.oses = split(v, {';'})
             hasCpuOs = true
             if c.explicitPlatforms:
               quit(errorStr(p, "you cannot have both 'platforms' and 'os'"))
-          of "cpu": 
+          of "cpu":
             c.cpus = split(v, {';'})
             hasCpuOs = true
             if c.explicitPlatforms:
               quit(errorStr(p, "you cannot have both 'platforms' and 'cpu'"))
-          of "platforms": 
+          of "platforms":
             platforms(c, v)
             c.explicitPlatforms = true
             if hasCpuOs:
@@ -389,7 +391,7 @@ proc readCFiles(c: var ConfigData, osA, cpuA: int) =
       of cfgKeyValuePair:
         case section
         of "ccompiler": pathFlags(p, k.key, k.value, c.ccompiler)
-        of "linker": 
+        of "linker":
           pathFlags(p, k.key, k.value, c.linker)
           # HACK: we conditionally add ``-lm -ldl``, so remove them from the
           # linker flags:
@@ -536,7 +538,7 @@ when haveZipLib:
     var n = "$#.zip" % proj
     if c.outdir.len == 0: n = "build" / n
     else: n = c.outdir / n
-    var z: TZipArchive
+    var z: ZipArchive
     if open(z, n, fmWrite):
       addFile(z, proj / buildBatFile32, "build" / buildBatFile32)
       addFile(z, proj / buildBatFile64, "build" / buildBatFile64)
@@ -558,28 +560,66 @@ when haveZipLib:
     else:
       quit("Cannot open for writing: " & n)
 
+proc xzDist(c: var ConfigData) =
+  let proj = toLower(c.name) & "-" & c.version
+  var n = "$#.tar.xz" % proj
+  let tmpDir = if c.outdir.len == 0: "build" else: c.outdir
+
+  template processFile(z, dest, src) =
+    let s = src
+    let d = dest
+    echo "Copying ", s, " to ", tmpDir / d
+    let destdir = tmpdir / d.splitFile.dir
+    if not dirExists(destdir): createDir(destdir)
+    copyFileWithPermissions(s, tmpDir / d)
+
+  processFile(z, proj / buildBatFile32, "build" / buildBatFile32)
+  processFile(z, proj / buildBatFile64, "build" / buildBatFile64)
+  processFile(z, proj / buildShFile, "build" / buildShFile)
+  processFile(z, proj / makeFile, "build" / makeFile)
+  processFile(z, proj / installShFile, installShFile)
+  processFile(z, proj / deinstallShFile, deinstallShFile)
+  for f in walkFiles(c.libpath / "lib/*.h"):
+    processFile(z, proj / "c_code" / extractFilename(f), f)
+  for osA in 1..c.oses.len:
+    for cpuA in 1..c.cpus.len:
+      var dir = buildDir(osA, cpuA)
+      for k, f in walkDir("build" / dir):
+        if k == pcFile: processFile(z, proj / dir / extractFilename(f), f)
+
+  for cat in items({fcConfig..fcOther, fcUnix}):
+    for f in items(c.cat[cat]): processFile(z, proj / f, f)
+
+  let oldDir = getCurrentDir()
+  setCurrentDir(tmpDir)
+  try:
+    if execShellCmd("XZ_OPT=-9 tar Jcf $1.tar.xz $1" % proj) != 0:
+      echo("External program failed")
+  finally:
+    setCurrentDir(oldDir)
+
 # -- prepare build files for .deb creation
 
 proc debDist(c: var ConfigData) =
   if not existsFile(getOutputDir(c) / "build.sh"): quit("No build.sh found.")
   if not existsFile(getOutputDir(c) / "install.sh"): quit("No install.sh found.")
-  
+
   if c.debOpts.shortDesc == "": quit("shortDesc must be set in the .ini file.")
   if c.debOpts.licenses.len == 0:
     echo("[Warning] No licenses specified for .deb creation.")
-  
+
   # -- Copy files into /tmp/..
   echo("Copying source to tmp/niminst/deb/")
   var currentSource = getCurrentDir()
   var workingDir = getTempDir() / "niminst" / "deb"
   var upstreamSource = (c.name.toLower() & "-" & c.version)
-  
+
   createDir(workingDir / upstreamSource)
-  
+
   template copyNimDist(f, dest: string): stmt =
     createDir((workingDir / upstreamSource / dest).splitFile.dir)
     copyFile(currentSource / f, workingDir / upstreamSource / dest)
-  
+
   # Don't copy all files, only the ones specified in the config:
   copyNimDist(buildShFile, buildShFile)
   copyNimDist(makeFile, makeFile)
@@ -624,5 +664,7 @@ if actionZip in c.actions:
     zipDist(c)
   else:
     quit("libzip is not installed")
+if actionXz in c.actions:
+  xzDist(c)
 if actionDeb in c.actions:
   debDist(c)

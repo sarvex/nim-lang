@@ -11,7 +11,7 @@
 ## See http://en.wikipedia.org/wiki/Roman_numerals for reference.
 
 const
-  RomanNumeralDigits* = {'I', 'i', 'V', 'v', 'X', 'x', 'L', 'l', 'C', 'c', 
+  RomanNumeralDigits* = {'I', 'i', 'V', 'v', 'X', 'x', 'L', 'l', 'C', 'c',
     'D', 'd', 'M', 'm'} ## set of all characters a Roman numeral may consist of
 
 proc romanToDecimal*(romanVal: string): int =
@@ -28,7 +28,7 @@ proc romanToDecimal*(romanVal: string): int =
     of 'C', 'c': val = 100
     of 'D', 'd': val = 500
     of 'M', 'm': val = 1000
-    else: 
+    else:
       raise newException(EInvalidValue, "invalid roman numeral: " & $romanVal)
     if val >= prevVal:
       inc(result, val)
@@ -44,16 +44,13 @@ proc decimalToRoman*(number: range[1..3_999]): string =
     ("XC", 90), ("L", 50), ("XL", 40), ("X", 10), ("IX", 9),
     ("V", 5), ("IV", 4), ("I", 1)]
   result = ""
-  var decVal = number
+  var decVal: int = number
   for key, val in items(romanComposites):
     while decVal >= val:
       dec(decVal, val)
       result.add(key)
 
 when isMainModule:
-  import math
-  randomize()
-  for i in 1 .. 100:
-    var rnd = 1 + random(3990)
-    assert rnd == rnd.decimalToRoman.romanToDecimal
+  for i in 1 .. 3_999:
+    assert i == i.decimalToRoman.romanToDecimal
 

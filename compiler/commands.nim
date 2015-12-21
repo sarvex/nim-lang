@@ -17,15 +17,16 @@ template bootSwitch(name, expr, userString: expr): expr =
   const name = if expr: " " & userString else: ""
 
 bootSwitch(usedRelease, defined(release), "-d:release")
-bootSwitch(usedGnuReadline, defined(useGnuReadline), "-d:useGnuReadline")
+bootSwitch(usedGnuReadline, defined(useLinenoise), "-d:useLinenoise")
 bootSwitch(usedNoCaas, defined(noCaas), "-d:noCaas")
 bootSwitch(usedBoehm, defined(boehmgc), "--gc:boehm")
 bootSwitch(usedMarkAndSweep, defined(gcmarkandsweep), "--gc:markAndSweep")
 bootSwitch(usedGenerational, defined(gcgenerational), "--gc:generational")
+bootSwitch(usedGoGC, defined(gogc), "--gc:go")
 bootSwitch(usedNoGC, defined(nogc), "--gc:none")
 
-import 
-  os, msgs, options, nversion, condsyms, strutils, extccomp, platform, lists, 
+import
+  os, msgs, options, nversion, condsyms, strutils, extccomp, platform, lists,
   wordrecg, parseutils, nimblecmd, idents, parseopt
 
 # but some have deps to imported modules. Yay.
@@ -39,8 +40,8 @@ bootSwitch(usedFFI, hasFFI, "-d:useFFI")
 
 proc writeCommandLineUsage*()
 
-type 
-  TCmdLinePass* = enum 
+type
+  TCmdLinePass* = enum
     passCmd1,                 # first pass over the command line
     passCmd2,                 # second pass over the command line
     passPP                    # preprocessor called processCommand()
@@ -54,98 +55,115 @@ const
   HelpMessage = "Nim Compiler Version $1 (" & CompileDate & ") [$2: $3]\n" &
       "Copyright (c) 2006-2015 by Andreas Rumpf\n"
 
-const 
+const
   Usage = slurp"doc/basicopt.txt".replace("//", "")
   AdvancedUsage = slurp"doc/advopt.txt".replace("//", "")
 
-proc getCommandLineDesc(): string = 
-  result = (HelpMessage % [VersionAsString, platform.OS[platform.hostOS].name, 
+proc getCommandLineDesc(): string =
+  result = (HelpMessage % [VersionAsString, platform.OS[platform.hostOS].name,
                            CPU[platform.hostCPU].name]) & Usage
 
-proc helpOnError(pass: TCmdLinePass) = 
+proc helpOnError(pass: TCmdLinePass) =
   if pass == passCmd1:
-    msgWriteln(getCommandLineDesc())
+    msgWriteln(getCommandLineDesc(), {msgStdout})
     msgQuit(0)
 
-proc writeAdvancedUsage(pass: TCmdLinePass) = 
+proc writeAdvancedUsage(pass: TCmdLinePass) =
   if pass == passCmd1:
-    msgWriteln(`%`(HelpMessage, [VersionAsString, 
-                                 platform.OS[platform.hostOS].name, 
-                                 CPU[platform.hostCPU].name]) & AdvancedUsage)
+    msgWriteln(`%`(HelpMessage, [VersionAsString,
+                                 platform.OS[platform.hostOS].name,
+                                 CPU[platform.hostCPU].name]) & AdvancedUsage,
+               {msgStdout})
     msgQuit(0)
 
-proc writeVersionInfo(pass: TCmdLinePass) = 
+proc writeVersionInfo(pass: TCmdLinePass) =
   if pass == passCmd1:
-    msgWriteln(`%`(HelpMessage, [VersionAsString, 
-                                 platform.OS[platform.hostOS].name, 
+    msgWriteln(`%`(HelpMessage, [VersionAsString,
+                                 platform.OS[platform.hostOS].name,
                                  CPU[platform.hostCPU].name]))
 
-    discard """const gitHash = gorge("git log -n 1 --format=%H")
-    if gitHash.strip.len == 40:
-      msgWriteln("git hash: " & gitHash)"""
+    const gitHash = gorge("git log -n 1 --format=%H").strip
+    when gitHash.len == 40:
+      msgWriteln("git hash: " & gitHash)
 
     msgWriteln("active boot switches:" & usedRelease & usedAvoidTimeMachine &
       usedTinyC & usedGnuReadline & usedNativeStacktrace & usedNoCaas &
-      usedFFI & usedBoehm & usedMarkAndSweep & usedGenerational & usedNoGC)
+      usedFFI & usedBoehm & usedMarkAndSweep & usedGenerational & usedGoGC & usedNoGC)
     msgQuit(0)
 
 var
   helpWritten: bool
 
-proc writeCommandLineUsage() = 
-  if not helpWritten: 
-    msgWriteln(getCommandLineDesc())
+proc writeCommandLineUsage() =
+  if not helpWritten:
+    msgWriteln(getCommandLineDesc(), {msgStdout})
     helpWritten = true
 
 proc addPrefix(switch: string): string =
   if len(switch) == 1: result = "-" & switch
   else: result = "--" & switch
 
-proc invalidCmdLineOption(pass: TCmdLinePass, switch: string, info: TLineInfo) = 
+proc invalidCmdLineOption(pass: TCmdLinePass, switch: string, info: TLineInfo) =
   if switch == " ": localError(info, errInvalidCmdLineOption, "-")
   else: localError(info, errInvalidCmdLineOption, addPrefix(switch))
 
-proc splitSwitch(switch: string, cmd, arg: var string, pass: TCmdLinePass, 
-                 info: TLineInfo) = 
+proc splitSwitch(switch: string, cmd, arg: var string, pass: TCmdLinePass,
+                 info: TLineInfo) =
   cmd = ""
   var i = 0
   if i < len(switch) and switch[i] == '-': inc(i)
   if i < len(switch) and switch[i] == '-': inc(i)
-  while i < len(switch): 
+  while i < len(switch):
     case switch[i]
     of 'a'..'z', 'A'..'Z', '0'..'9', '_', '.': add(cmd, switch[i])
-    else: break 
+    else: break
     inc(i)
   if i >= len(switch): arg = ""
   elif switch[i] in {':', '=', '['}: arg = substr(switch, i + 1)
   else: invalidCmdLineOption(pass, switch, info)
-  
-proc processOnOffSwitch(op: TOptions, arg: string, pass: TCmdLinePass, 
-                        info: TLineInfo) = 
+
+proc processOnOffSwitch(op: TOptions, arg: string, pass: TCmdLinePass,
+                        info: TLineInfo) =
   case whichKeyword(arg)
   of wOn: gOptions = gOptions + op
   of wOff: gOptions = gOptions - op
   else: localError(info, errOnOrOffExpectedButXFound, arg)
-  
-proc processOnOffSwitchG(op: TGlobalOptions, arg: string, pass: TCmdLinePass, 
-                         info: TLineInfo) = 
+
+proc processOnOffSwitchOrList(op: TOptions, arg: string, pass: TCmdLinePass,
+                              info: TLineInfo): bool =
+  result = false
+  case whichKeyword(arg)
+  of wOn: gOptions = gOptions + op
+  of wOff: gOptions = gOptions - op
+  else:
+    if arg == "list":
+      result = true
+    else:
+      localError(info, errOnOffOrListExpectedButXFound, arg)
+
+proc processOnOffSwitchG(op: TGlobalOptions, arg: string, pass: TCmdLinePass,
+                         info: TLineInfo) =
   case whichKeyword(arg)
   of wOn: gGlobalOptions = gGlobalOptions + op
   of wOff: gGlobalOptions = gGlobalOptions - op
   else: localError(info, errOnOrOffExpectedButXFound, arg)
-  
-proc expectArg(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) = 
+
+proc expectArg(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   if arg == "": localError(info, errCmdLineArgExpected, addPrefix(switch))
-  
-proc expectNoArg(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) = 
+
+proc expectNoArg(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   if arg != "": localError(info, errCmdLineNoArgExpected, addPrefix(switch))
-  
-proc processSpecificNote(arg: string, state: TSpecialWord, pass: TCmdLinePass, 
-                         info: TLineInfo; orig: string) = 
+
+var
+  enableNotes: TNoteKinds
+  disableNotes: TNoteKinds
+
+proc processSpecificNote(arg: string, state: TSpecialWord, pass: TCmdLinePass,
+                         info: TLineInfo; orig: string) =
   var id = ""  # arg = "X]:on|off"
   var i = 0
   var n = hintMin
-  while i < len(arg) and (arg[i] != ']'): 
+  while i < len(arg) and (arg[i] != ']'):
     add(id, arg[i])
     inc(i)
   if i < len(arg) and (arg[i] == ']'): inc(i)
@@ -161,11 +179,15 @@ proc processSpecificNote(arg: string, state: TSpecialWord, pass: TCmdLinePass,
     if x >= 0: n = TNoteKind(x + ord(warnMin))
     else: localError(info, "unknown warning: " & id)
   case whichKeyword(substr(arg, i))
-  of wOn: incl(gNotes, n)
-  of wOff: excl(gNotes, n)
+  of wOn:
+    incl(gNotes, n)
+    incl(enableNotes, n)
+  of wOff:
+    excl(gNotes, n)
+    incl(disableNotes, n)
   else: localError(info, errOnOrOffExpectedButXFound, arg)
 
-proc processCompile(filename: string) = 
+proc processCompile(filename: string) =
   var found = findFile(filename)
   if found == "": found = filename
   var trunc = changeFileExt(found, "")
@@ -181,6 +203,7 @@ proc testCompileOptionArg*(switch, arg: string, info: TLineInfo): bool =
     of "v2":           result = gSelectedGC == gcV2
     of "markandsweep": result = gSelectedGC == gcMarkAndSweep
     of "generational": result = gSelectedGC == gcGenerational
+    of "go":           result = gSelectedGC == gcGo
     of "none":         result = gSelectedGC == gcNone
     else: localError(info, errNoneBoehmRefcExpectedButXFound, arg)
   of "opt":
@@ -191,7 +214,7 @@ proc testCompileOptionArg*(switch, arg: string, info: TLineInfo): bool =
     else: localError(info, errNoneSpeedOrSizeExpectedButXFound, arg)
   else: invalidCmdLineOption(passCmd1, switch, info)
 
-proc testCompileOption*(switch: string, info: TLineInfo): bool = 
+proc testCompileOption*(switch: string, info: TLineInfo): bool =
   case switch.normalize
   of "debuginfo": result = contains(gGlobalOptions, optCDebug)
   of "compileonly", "c": result = contains(gGlobalOptions, optCompileOnly)
@@ -228,17 +251,19 @@ proc testCompileOption*(switch: string, info: TLineInfo): bool =
   of "patterns": result = contains(gOptions, optPatterns)
   of "experimental": result = gExperimentalMode
   else: invalidCmdLineOption(passCmd1, switch, info)
-  
-proc processPath(path: string, notRelativeToProj = false): string =
+
+proc processPath(path: string, notRelativeToProj = false,
+                               cfginfo = unknownLineInfo()): string =
   let p = if notRelativeToProj or os.isAbsolute(path) or
-              '$' in path or path[0] == '.': 
-            path 
+              '$' in path or path[0] == '.':
+            path
           else:
             options.gProjectPath / path
   result = unixToNativePath(p % ["nimrod", getPrefixDir(),
     "nim", getPrefixDir(),
     "lib", libpath,
     "home", removeTrailingDirSep(os.getHomeDir()),
+    "config", cfginfo.toFullPath().splitFile().dir,
     "projectname", options.gProjectName,
     "projectpath", options.gProjectPath])
 
@@ -251,14 +276,14 @@ proc trackDirty(arg: string, info: TLineInfo) =
     localError(info, errInvalidNumber, a[1])
   if parseUtils.parseInt(a[3], column) <= 0:
     localError(info, errInvalidNumber, a[2])
-  
+
   let dirtyOriginalIdx = a[1].fileInfoIdx
   if dirtyOriginalIdx >= 0:
     msgs.setDirtyFile(dirtyOriginalIdx, a[0])
 
   gTrackPos = newLineInfo(dirtyOriginalIdx, line, column)
 
-proc track(arg: string, info: TLineInfo) = 
+proc track(arg: string, info: TLineInfo) =
   var a = arg.split(',')
   if a.len != 3: localError(info, errTokenExpected, "FILE,LINE,COLUMN")
   var line, column: int
@@ -273,15 +298,15 @@ proc dynlibOverride(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
     expectArg(switch, arg, pass, info)
     options.inclDynlibOverride(arg)
 
-proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) = 
-  var 
+proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
+  var
     theOS: TSystemOS
     cpu: TSystemCPU
     key, val: string
   case switch.normalize
-  of "path", "p": 
+  of "path", "p":
     expectArg(switch, arg, pass, info)
-    addPath(processPath(arg), info)
+    addPath(processPath(arg, cfginfo=info), info)
   of "nimblepath", "babelpath":
     # keep the old name for compat
     if pass in {passCmd2, passPP} and not options.gNoNimblePath:
@@ -303,7 +328,7 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   of "nimcache":
     expectArg(switch, arg, pass, info)
     options.nimcacheDir = processPath(arg)
-  of "out", "o": 
+  of "out", "o":
     expectArg(switch, arg, pass, info)
     options.outFile = arg
   of "docseesrcurl":
@@ -311,19 +336,19 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
     options.docSeeSrcUrl = arg
   of "mainmodule", "m":
     discard "allow for backwards compatibility, but don't do anything"
-  of "define", "d": 
+  of "define", "d":
     expectArg(switch, arg, pass, info)
     defineSymbol(arg)
-  of "undef", "u": 
+  of "undef", "u":
     expectArg(switch, arg, pass, info)
     undefSymbol(arg)
   of "symbol":
     expectArg(switch, arg, pass, info)
-    declareSymbol(arg)  
-  of "compile": 
+    # deprecated, do nothing
+  of "compile":
     expectArg(switch, arg, pass, info)
     if pass in {passCmd2, passPP}: processCompile(arg)
-  of "link": 
+  of "link":
     expectArg(switch, arg, pass, info)
     if pass in {passCmd2, passPP}: addFileToLink(arg)
   of "debuginfo":
@@ -332,25 +357,25 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   of "embedsrc":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optEmbedOrigSrc)
-  of "compileonly", "c": 
+  of "compileonly", "c":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optCompileOnly)
-  of "nolinking": 
+  of "nolinking":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optNoLinking)
-  of "nomain": 
+  of "nomain":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optNoMain)
-  of "forcebuild", "f": 
+  of "forcebuild", "f":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optForceFullMake)
   of "project":
     expectNoArg(switch, arg, pass, info)
     gWholeProject = true
-  of "gc": 
+  of "gc":
     expectArg(switch, arg, pass, info)
     case arg.normalize
-    of "boehm": 
+    of "boehm":
       gSelectedGC = gcBoehm
       defineSymbol("boehmgc")
     of "refc":
@@ -363,14 +388,19 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
     of "generational":
       gSelectedGC = gcGenerational
       defineSymbol("gcgenerational")
+    of "go":
+      gSelectedGC = gcGo
+      defineSymbol("gogc")
     of "none":
       gSelectedGC = gcNone
       defineSymbol("nogc")
     else: localError(info, errNoneBoehmRefcExpectedButXFound, arg)
-  of "warnings", "w": processOnOffSwitch({optWarns}, arg, pass, info)
+  of "warnings", "w":
+    if processOnOffSwitchOrList({optWarns}, arg, pass, info): listWarnings()
   of "warning": processSpecificNote(arg, wWarning, pass, info, switch)
   of "hint": processSpecificNote(arg, wHint, pass, info, switch)
-  of "hints": processOnOffSwitch({optHints}, arg, pass, info)
+  of "hints":
+    if processOnOffSwitchOrList({optHints}, arg, pass, info): listHints()
   of "threadanalysis": processOnOffSwitchG({optThreadAnalysis}, arg, pass, info)
   of "stacktrace": processOnOffSwitch({optStackTrace}, arg, pass, info)
   of "linetrace": processOnOffSwitch({optLineTrace}, arg, pass, info)
@@ -388,7 +418,7 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
       undefSymbol("endb")
     else:
       localError(info, "expected endb|gdb but found " & arg)
-  of "profiler": 
+  of "profiler":
     processOnOffSwitch({optProfiler}, arg, pass, info)
     if optProfiler in gOptions: defineSymbol("profiler")
     else: undefSymbol("profiler")
@@ -405,9 +435,11 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   of "linedir": processOnOffSwitch({optLineDir}, arg, pass, info)
   of "assertions", "a": processOnOffSwitch({optAssert}, arg, pass, info)
   of "deadcodeelim": processOnOffSwitchG({optDeadCodeElim}, arg, pass, info)
+  of "reportconceptfailures":
+    processOnOffSwitchG({optReportConceptFailures}, arg, pass, info)
   of "threads":
     processOnOffSwitchG({optThreads}, arg, pass, info)
-    if optThreads in gGlobalOptions: incl(gNotes, warnGcUnsafe)
+    #if optThreads in gGlobalOptions: incl(gNotes, warnGcUnsafe)
   of "tlsemulation": processOnOffSwitchG({optTlsEmulation}, arg, pass, info)
   of "taintmode": processOnOffSwitchG({optTaintMode}, arg, pass, info)
   of "implicitstatic":
@@ -417,17 +449,17 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   of "opt":
     expectArg(switch, arg, pass, info)
     case arg.normalize
-    of "speed": 
+    of "speed":
       incl(gOptions, optOptimizeSpeed)
       excl(gOptions, optOptimizeSize)
-    of "size": 
+    of "size":
       excl(gOptions, optOptimizeSpeed)
       incl(gOptions, optOptimizeSize)
     of "none":
       excl(gOptions, optOptimizeSpeed)
       excl(gOptions, optOptimizeSize)
     else: localError(info, errNoneSpeedOrSizeExpectedButXFound, arg)
-  of "app": 
+  of "app":
     expectArg(switch, arg, pass, info)
     case arg.normalize
     of "gui":
@@ -449,10 +481,10 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
       defineSymbol("library")
       defineSymbol("staticlib")
     else: localError(info, errGuiConsoleOrLibExpectedButXFound, arg)
-  of "passc", "t": 
+  of "passc", "t":
     expectArg(switch, arg, pass, info)
     if pass in {passCmd2, passPP}: extccomp.addCompileOption(arg)
-  of "passl", "l": 
+  of "passl", "l":
     expectArg(switch, arg, pass, info)
     if pass in {passCmd2, passPP}: extccomp.addLinkOption(arg)
   of "cincludes":
@@ -475,52 +507,53 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   of "include":
     expectArg(switch, arg, pass, info)
     if pass in {passCmd2, passPP}: implicitIncludes.add arg
-  of "listcmd": 
+  of "listcmd":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optListCmd)
-  of "genmapping": 
+  of "genmapping":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optGenMapping)
-  of "os": 
+  of "os":
     expectArg(switch, arg, pass, info)
-    if pass in {passCmd1, passPP}: 
+    if pass in {passCmd1, passPP}:
       theOS = platform.nameToOS(arg)
       if theOS == osNone: localError(info, errUnknownOS, arg)
-      elif theOS != platform.hostOS: 
+      elif theOS != platform.hostOS:
         setTarget(theOS, targetCPU)
-        condsyms.initDefines()
-  of "cpu": 
+  of "cpu":
     expectArg(switch, arg, pass, info)
-    if pass in {passCmd1, passPP}: 
+    if pass in {passCmd1, passPP}:
       cpu = platform.nameToCPU(arg)
       if cpu == cpuNone: localError(info, errUnknownCPU, arg)
-      elif cpu != platform.hostCPU: 
+      elif cpu != platform.hostCPU:
         setTarget(targetOS, cpu)
-        condsyms.initDefines()
-  of "run", "r": 
+  of "run", "r":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optRun)
-  of "verbosity": 
+  of "verbosity":
     expectArg(switch, arg, pass, info)
     gVerbosity = parseInt(arg)
-  of "parallelbuild": 
+    gNotes = NotesVerbosity[gVerbosity]
+    incl(gNotes, enableNotes)
+    excl(gNotes, disableNotes)
+  of "parallelbuild":
     expectArg(switch, arg, pass, info)
     gNumberOfProcessors = parseInt(arg)
-  of "version", "v": 
+  of "version", "v":
     expectNoArg(switch, arg, pass, info)
     writeVersionInfo(pass)
-  of "advanced": 
+  of "advanced":
     expectNoArg(switch, arg, pass, info)
     writeAdvancedUsage(pass)
-  of "help", "h": 
+  of "help", "h":
     expectNoArg(switch, arg, pass, info)
     helpOnError(pass)
-  of "symbolfiles": 
+  of "symbolfiles":
     processOnOffSwitchG({optSymbolFiles}, arg, pass, info)
-  of "skipcfg": 
+  of "skipcfg":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optSkipConfigFile)
-  of "skipprojcfg": 
+  of "skipprojcfg":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optSkipProjConfigFile)
   of "skipusercfg":
@@ -529,17 +562,18 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   of "skipparentcfg":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optSkipParentConfigFiles)
-  of "genscript": 
+  of "genscript":
     expectNoArg(switch, arg, pass, info)
     incl(gGlobalOptions, optGenScript)
+  of "colors": processOnOffSwitchG({optUseColors}, arg, pass, info)
   of "lib":
     expectArg(switch, arg, pass, info)
     libpath = processPath(arg, notRelativeToProj=true)
-  of "putenv": 
+  of "putenv":
     expectArg(switch, arg, pass, info)
     splitSwitch(arg, key, val, pass, info)
     os.putEnv(key, val)
-  of "cc": 
+  of "cc":
     expectArg(switch, arg, pass, info)
     setCC(arg)
   of "track":
@@ -548,7 +582,7 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   of "trackdirty":
     expectArg(switch, arg, pass, info)
     trackDirty(arg, info)
-  of "suggest": 
+  of "suggest":
     expectNoArg(switch, arg, pass, info)
     gIdeCmd = ideSug
   of "def":
@@ -581,10 +615,14 @@ proc processSwitch(switch, arg: string, pass: TCmdLinePass, info: TLineInfo) =
   of "experimental":
     expectNoArg(switch, arg, pass, info)
     gExperimentalMode = true
+  of "assembler":
+    cAssembler = nameToCC(arg)
+    if cAssembler notin cValidAssemblers:
+      localError(info, errGenerated, "'$1' is not a valid assembler." % [arg])
   else:
     if strutils.find(switch, '.') >= 0: options.setConfigVar(switch, arg)
     else: invalidCmdLineOption(pass, switch, info)
-  
+
 proc processCommand(switch: string, pass: TCmdLinePass) =
   var cmd, arg: string
   splitSwitch(switch, cmd, arg, pass, gCmdLineInfo)
@@ -600,21 +638,28 @@ proc processSwitch*(pass: TCmdLinePass; p: OptParser) =
   # hint[X]:off is parsed as (p.key = "hint[X]", p.val = "off")
   # we fix this here
   var bracketLe = strutils.find(p.key, '[')
-  if bracketLe >= 0: 
+  if bracketLe >= 0:
     var key = substr(p.key, 0, bracketLe - 1)
     var val = substr(p.key, bracketLe + 1) & ':' & p.val
     processSwitch(key, val, pass, gCmdLineInfo)
-  else: 
+  else:
     processSwitch(p.key, p.val, pass, gCmdLineInfo)
 
-proc processArgument*(pass: TCmdLinePass; p: OptParser; 
+proc processArgument*(pass: TCmdLinePass; p: OptParser;
                       argsCount: var int): bool =
   if argsCount == 0:
-    options.command = p.key
+    # nim filename.nims  is the same as "nim e filename.nims":
+    if p.key.endswith(".nims"):
+      options.command = "e"
+      options.gProjectName = unixToNativePath(p.key)
+      arguments = cmdLineRest(p)
+      result = true
+    elif pass != passCmd2:
+      options.command = p.key
   else:
     if pass == passCmd1: options.commandArgs.add p.key
     if argsCount == 1:
-      # support UNIX style filenames anywhere for portable build scripts:
+      # support UNIX style filenames everywhere for portable build scripts:
       options.gProjectName = unixToNativePath(p.key)
       arguments = cmdLineRest(p)
       result = true

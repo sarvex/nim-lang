@@ -16,7 +16,7 @@
                        # of the standard library!
 
 
-proc fputs(c: cstring, f: File) {.importc: "fputs", header: "<stdio.h>", 
+proc fputs(c: cstring, f: File) {.importc: "fputs", header: "<stdio.h>",
   tags: [WriteIOEffect].}
 proc fgets(c: cstring, n: int, f: File): cstring {.
   importc: "fgets", header: "<stdio.h>", tags: [ReadIOEffect].}
@@ -26,11 +26,10 @@ proc ungetc(c: cint, f: File) {.importc: "ungetc", header: "<stdio.h>",
   tags: [].}
 proc putc(c: char, stream: File) {.importc: "putc", header: "<stdio.h>",
   tags: [WriteIOEffect].}
-proc fprintf(f: File, frmt: cstring) {.importc: "fprintf", 
+proc fprintf(f: File, frmt: cstring) {.importc: "fprintf",
   header: "<stdio.h>", varargs, tags: [WriteIOEffect].}
 proc strlen(c: cstring): int {.
   importc: "strlen", header: "<string.h>", tags: [].}
-
 
 # C routine that is used here:
 proc fread(buf: pointer, size, n: int, f: File): int {.
@@ -38,8 +37,13 @@ proc fread(buf: pointer, size, n: int, f: File): int {.
 proc fseek(f: File, offset: clong, whence: int): int {.
   importc: "fseek", header: "<stdio.h>", tags: [].}
 proc ftell(f: File): int {.importc: "ftell", header: "<stdio.h>", tags: [].}
+proc ferror(f: File): int {.importc: "ferror", header: "<stdio.h>", tags: [].}
 proc setvbuf(stream: File, buf: pointer, typ, size: cint): cint {.
   importc, header: "<stdio.h>", tags: [].}
+proc memchr(s: pointer, c: cint, n: csize): pointer {.
+  importc: "memchr", header: "<string.h>", tags: [].}
+proc memset(s: pointer, c: cint, n: csize) {.
+  header: "<string.h>", importc: "memset", tags: [].}
 
 {.push stackTrace:off, profiler:off.}
 proc write(f: File, c: cstring) = fputs(c, f)
@@ -68,38 +72,60 @@ proc raiseEIO(msg: string) {.noinline, noreturn.} =
   sysFatal(IOError, msg)
 
 proc readLine(f: File, line: var TaintedString): bool =
-  # of course this could be optimized a bit; but IO is slow anyway...
-  # and it was difficult to get this CORRECT with Ansi C's methods
-  setLen(line.string, 0) # reuse the buffer!
+  var pos = 0
+  # Use the currently reserved space for a first try
+  when defined(nimscript):
+    var space = 80
+  else:
+    var space = cast[PGenericSeq](line.string).space
+  line.string.setLen(space)
+
   while true:
-    var c = fgetc(f)
-    if c < 0'i32:
-      if line.len > 0: break
-      else: return false
-    if c == 10'i32: break # LF
-    if c == 13'i32:  # CR
-      c = fgetc(f) # is the next char LF?
-      if c != 10'i32: ungetc(c, f) # no, put the character back
-      break
-    add line.string, chr(int(c))
-  result = true
+    # memset to \l so that we can tell how far fgets wrote, even on EOF, where
+    # fgets doesn't append an \l
+    memset(addr line.string[pos], '\l'.ord, space)
+    if fgets(addr line.string[pos], space, f) == nil:
+      line.string.setLen(0)
+      return false
+    let m = memchr(addr line.string[pos], '\l'.ord, space)
+    if m != nil:
+      # \l found: Could be our own or the one by fgets, in any case, we're done
+      var last = cast[ByteAddress](m) - cast[ByteAddress](addr line.string[0])
+      if last > 0 and line.string[last-1] == '\c':
+        line.string.setLen(last-1)
+        return true
+        # We have to distinguish between two possible cases:
+        # \0\l\0 => line ending in a null character.
+        # \0\l\l => last line without newline, null was put there by fgets.
+      elif last > 0 and line.string[last-1] == '\0':
+        if last < pos + space - 1 and line.string[last+1] != '\0':
+          dec last
+      line.string.setLen(last)
+      return true
+    else:
+      # fgets will have inserted a null byte at the end of the string.
+      dec space
+    # No \l found: Increase buffer and read more
+    inc pos, space
+    space = 128 # read in 128 bytes at a time
+    line.string.setLen(pos+space)
 
 proc readLine(f: File): TaintedString =
   result = TaintedString(newStringOfCap(80))
   if not readLine(f, result): raiseEIO("EOF reached")
 
-proc write(f: File, i: int) = 
+proc write(f: File, i: int) =
   when sizeof(int) == 8:
     fprintf(f, "%lld", i)
   else:
     fprintf(f, "%ld", i)
 
-proc write(f: File, i: BiggestInt) = 
+proc write(f: File, i: BiggestInt) =
   when sizeof(BiggestInt) == 8:
     fprintf(f, "%lld", i)
   else:
     fprintf(f, "%ld", i)
-    
+
 proc write(f: File, b: bool) =
   if b: write(f, "true")
   else: write(f, "false")
@@ -110,7 +136,7 @@ proc write(f: File, c: char) = putc(c, f)
 proc write(f: File, a: varargs[string, `$`]) =
   for x in items(a): write(f, x)
 
-proc readAllBuffer(file: File): string = 
+proc readAllBuffer(file: File): string =
   # This proc is for File we want to read but don't know how many
   # bytes we need to read before the buffer is empty.
   result = ""
@@ -123,8 +149,8 @@ proc readAllBuffer(file: File): string =
       buffer.setLen(bytesRead)
       result.add(buffer)
       break
-  
-proc rawFileSize(file: File): int = 
+
+proc rawFileSize(file: File): int =
   # this does not raise an error opposed to `getFileSize`
   var oldPos = ftell(file)
   discard fseek(file, 0, 2) # seek the end of the file
@@ -134,23 +160,34 @@ proc rawFileSize(file: File): int =
 proc readAllFile(file: File, len: int): string =
   # We acquire the filesize beforehand and hope it doesn't change.
   # Speeds things up.
-  result = newString(int(len))
-  if readBuffer(file, addr(result[0]), int(len)) != len:
+  result = newString(len)
+  let bytes = readBuffer(file, addr(result[0]), len)
+  if endOfFile(file):
+    if bytes < len:
+      result.setLen(bytes)
+  elif ferror(file) != 0:
     raiseEIO("error while reading from file")
+  else:
+    # We read all the bytes but did not reach the EOF
+    # Try to read it as a buffer
+    result.add(readAllBuffer(file))
 
 proc readAllFile(file: File): string =
   var len = rawFileSize(file)
   result = readAllFile(file, len)
-  
-proc readAll(file: File): TaintedString = 
+
+proc readAll(file: File): TaintedString =
   # Separate handling needed because we need to buffer when we
   # don't know the overall length of the File.
-  let len = if file != stdin: rawFileSize(file) else: -1
+  when declared(stdin):
+    let len = if file != stdin: rawFileSize(file) else: -1
+  else:
+    let len = rawFileSize(file)
   if len > 0:
     result = readAllFile(file, len).TaintedString
   else:
     result = readAllBuffer(file).TaintedString
-  
+
 proc readFile(filename: string): TaintedString =
   var f = open(filename)
   try:
@@ -171,12 +208,19 @@ proc endOfFile(f: File): bool =
   ungetc(c, f)
   return c < 0'i32
 
-proc writeln[Ty](f: File, x: varargs[Ty, `$`]) =
-  for i in items(x): write(f, i)
+proc writeLn[Ty](f: File, x: varargs[Ty, `$`]) =
+  for i in items(x):
+    write(f, i)
   write(f, "\n")
 
-proc rawEcho(x: string) {.inline, compilerproc.} = write(stdout, x)
-proc rawEchoNL() {.inline, compilerproc.} = write(stdout, "\n")
+proc writeLine[Ty](f: File, x: varargs[Ty, `$`]) =
+  for i in items(x):
+    write(f, i)
+  write(f, "\n")
+
+when declared(stdout):
+  proc rawEcho(x: string) {.inline, compilerproc.} = write(stdout, x)
+  proc rawEchoNL() {.inline, compilerproc.} = write(stdout, "\n")
 
 # interface to the C procs:
 
@@ -229,7 +273,7 @@ proc open(f: var File, filename: string,
     elif bufSize == 0:
       discard setvbuf(f, nil, IONBF, 0)
 
-proc reopen(f: File, filename: string, mode: FileMode = fmRead): bool = 
+proc reopen(f: File, filename: string, mode: FileMode = fmRead): bool =
   var p: pointer = freopen(filename, FormatOpen[mode], f)
   result = p != nil
 
@@ -243,23 +287,23 @@ proc open(f: var File, filehandle: FileHandle, mode: FileMode): bool =
 proc fwrite(buf: pointer, size, n: int, f: File): int {.
   importc: "fwrite", noDecl.}
 
-proc readBuffer(f: File, buffer: pointer, len: int): int =
+proc readBuffer(f: File, buffer: pointer, len: Natural): int =
   result = fread(buffer, 1, len, f)
 
-proc readBytes(f: File, a: var openArray[int8|uint8], start, len: int): int =
+proc readBytes(f: File, a: var openArray[int8|uint8], start, len: Natural): int =
   result = readBuffer(f, addr(a[start]), len)
 
-proc readChars(f: File, a: var openArray[char], start, len: int): int =
+proc readChars(f: File, a: var openArray[char], start, len: Natural): int =
   result = readBuffer(f, addr(a[start]), len)
 
 {.push stackTrace:off, profiler:off.}
-proc writeBytes(f: File, a: openArray[int8|uint8], start, len: int): int =
+proc writeBytes(f: File, a: openArray[int8|uint8], start, len: Natural): int =
   var x = cast[ptr array[0..1000_000_000, int8]](a)
   result = writeBuffer(f, addr(x[start]), len)
-proc writeChars(f: File, a: openArray[char], start, len: int): int =
+proc writeChars(f: File, a: openArray[char], start, len: Natural): int =
   var x = cast[ptr array[0..1000_000_000, int8]](a)
   result = writeBuffer(f, addr(x[start]), len)
-proc writeBuffer(f: File, buffer: pointer, len: int): int =
+proc writeBuffer(f: File, buffer: pointer, len: Natural): int =
   result = fwrite(buffer, 1, len, f)
 
 proc write(f: File, s: string) =
