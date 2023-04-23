@@ -1,6 +1,8 @@
 discard """
+  matrix: "--mm:refc"
   errormsg: "(k)..(k) not disjoint from (k)..(k)"
-  line: 23
+  line: 24
+  action: compile
 """
 
 # bug #1597

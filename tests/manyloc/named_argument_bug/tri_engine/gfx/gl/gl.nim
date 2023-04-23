@@ -6,7 +6,7 @@ export
   opengl
 
 type
-  EGL* = object of E_Base
+  EGL* = object of Exception
   EGL_code* = object of EGL
     code*: EGL_err
   EGL_err {.pure.} = enum
@@ -53,7 +53,7 @@ else:
   const
     glRealType* = cGLfloat
 
-proc setUniformV4*[T](loc: GLint, vecs: var openarray[TV4[T]]) =
+proc setUniformV4*[T](loc: GLint, vecs: var openArray[TV4[T]]) =
   glUniform4fv(loc, vecs.len.GLsizei, cast[ptr GLfloat](vecs[0].addr))
 
 proc setUniformV4*[T](loc: GLint, vec: TV4[T]) =

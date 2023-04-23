@@ -18,7 +18,7 @@ type
   # it's also possible to use a strongly typed tuple here
   VTable = array[0..1, pointer]
 
-  TBase = object {.inheritable.}
+  TBase {.inheritable.} = object
     vtbl: ptr VTable
 
   TUserObject1 = object of TBase
@@ -58,10 +58,10 @@ proc create(T: typedesc): T =
   result.vtbl = getVTable(T)
 
 proc baseFoo(o: var TBase): int =
-  return cast[fooProc[TBase]](o.vtbl[0]) (o)
+  return cast[fooProc[TBase]](o.vtbl[0])(o)
 
 proc baseBar(o: var TBase) =
-  cast[barProc[TBase]](o.vtbl[1]) (o)
+  cast[barProc[TBase]](o.vtbl[1])(o)
 
 var a = TUserObject1.create
 var b = TUserObject2.create

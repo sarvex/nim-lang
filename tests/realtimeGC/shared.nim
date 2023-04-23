@@ -1,7 +1,3 @@
-discard """
-  cmd: "nim $target --debuginfo --hints:on --app:lib $options $file"
-"""
-
 import strutils
 
 # Global state, accessing with threads, no locks. Don't do this at

@@ -1,7 +1,15 @@
-# Test the new parseopt module
+discard """
+disabled: true
+"""
+
+# this file has a type in the name, and it does not really test
+# parseopt module, because tester has no support to set arguments. Test the
+# new parseopt module. Therefore it is disabled.
 
 import
   parseopt
+
+import std/[assertions, syncio]
 
 proc writeHelp() =
   writeLine(stdout, "Usage: tparsopt [options] filename [options]")
@@ -21,7 +29,7 @@ for kind, key, val in getopt():
     of "version", "v": writeVersion()
     else:
       writeLine(stdout, "Unknown command line option: ", key, ": ", val)
-  of cmdEnd: assert(false) # cannot happen
+  of cmdEnd: doAssert(false) # cannot happen
 if filename == "":
   # no filename has been given, so we show the help:
   writeHelp()

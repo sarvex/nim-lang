@@ -1,3 +1,8 @@
+discard """
+  output: '''42
+Foo'''
+"""
+
 type TFoo{.exportc.} = object
  x:int
 
@@ -10,8 +15,8 @@ echo s[0].x
 
 # bug #563
 type
-  Foo =
-    object {.inheritable.}
+  Foo {.inheritable.} =
+    object
       x: int
 
   Bar =
@@ -48,3 +53,5 @@ type NamedGraphic = object of Graphic2
 
 var ngr = NamedGraphic(kind: Koo, radius: 6.9, name: "Foo")
 echo ngr.name
+
+GC_fullCollect()

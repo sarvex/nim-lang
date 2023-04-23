@@ -1,22 +1,23 @@
 discard """
-  cmd: "nim $target --hints:on --threads:on $options $file"
+  matrix: "--mm:refc; --mm:orc"
+  action: compile
 """
 
 type
-  TThreadFuncArgs[T] = object of RootObj
+  ThreadFuncArgs[T] = object of RootObj
     a: proc(): T {.thread.}
     b: proc(val: T) {.thread.}
 
-proc handleThreadFunc(arg: TThreadFuncArgs[int]){.thread.} =
+proc handleThreadFunc(arg: ThreadFuncArgs[int]){.thread.} =
   var fn = arg.a
   var callback = arg.b
   var output = fn()
   callback(output)
 
 proc `@||->`*[T](fn: proc(): T {.thread.},
-                 callback: proc(val: T){.thread.}): TThread[TThreadFuncArgs[T]] =
-  var thr: TThread[TThreadFuncArgs[T]]
-  var args: TThreadFuncArgs[T]
+                 callback: proc(val: T){.thread.}): Thread[ThreadFuncArgs[T]] =
+  var thr: Thread[ThreadFuncArgs[T]]
+  var args: ThreadFuncArgs[T]
   args.a = fn
   args.b = callback
   createThread(thr, handleThreadFunc, args)
@@ -25,7 +26,7 @@ proc `@||->`*[T](fn: proc(): T {.thread.},
 proc `||->`*[T](fn: proc(): T{.thread.}, callback: proc(val: T){.thread.}) =
   discard fn @||-> callback
 
-when isMainModule:
+when true:
   import os
   proc testFunc(): int {.thread.} =
     return 1
@@ -36,4 +37,3 @@ when isMainModule:
   echo("test")
   joinThread(thr)
   os.sleep(3000)
-

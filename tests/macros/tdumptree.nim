@@ -1,13 +1,14 @@
 discard """
-msg: '''StmtList
+nimout: '''
+StmtList
   VarSection
     IdentDefs
-      Ident !"x"
-      nil
+      Ident "x"
+      Empty
       Call
         DotExpr
-          Ident !"foo"
-          Ident !"create"
+          Ident "foo"
+          Ident "create"
         IntLit 56'''
 """
 

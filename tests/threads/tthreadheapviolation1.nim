@@ -1,12 +1,12 @@
 discard """
-  line: 11
   errormsg: "'horrible' is not GC-safe"
+  line: 11
   cmd: "nim $target --hints:on --threads:on $options $file"
 """
 
 var
   global: string = "test string"
-  t: TThread[void]
+  t: Thread[void]
 
 proc horrible() {.thread.} =
   global = "string in thread local heap!"
@@ -16,5 +16,3 @@ proc horrible() {.thread.} =
 
 createThread[void](t, horrible)
 joinThread(t)
-
-

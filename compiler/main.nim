@@ -9,366 +9,419 @@
 
 # implements the command dispatcher and several commands
 
+when not defined(nimcore):
+  {.error: "nimcore MUST be defined for Nim's core tooling".}
+
 import
-  llstream, strutils, ast, astalgo, lexer, syntaxes, renderer, options, msgs,
-  os, condsyms, rodread, rodwrite, times,
-  wordrecg, sem, semdata, idents, passes, docgen, extccomp,
-  cgen, jsgen, json, nversion,
-  platform, nimconf, importer, passaux, depends, vm, vmdef, types, idgen,
-  docgen2, service, parser, modules, ccgutils, sigmatch, ropes, lists
+  std/[strutils, os, times, tables, sha1, with, json],
+  llstream, ast, lexer, syntaxes, options, msgs,
+  condsyms,
+  idents, extccomp,
+  cgen, nversion,
+  platform, nimconf, depends,
+  modules,
+  modulegraphs, lineinfos, pathutils, vmprofiler
 
-from magicsys import systemModule, resetSysTypes
 
-proc rodPass =
-  if optSymbolFiles in gGlobalOptions:
-    registerPass(rodwritePass)
+when defined(nimPreviewSlimSystem):
+  import std/[syncio, assertions]
 
-proc codegenPass =
-  registerPass cgenPass
+import ic / [cbackend, integrity, navigator]
+from ic / ic import rodViewer
 
-proc semanticPasses =
-  registerPass verbosePass
-  registerPass semPass
+import pipelines
 
-proc commandGenDepend =
-  semanticPasses()
-  registerPass(gendependPass)
-  registerPass(cleanupPass)
-  compileProject()
-  generateDot(gProjectFull)
-  execExternalProgram("dot -Tpng -o" & changeFileExt(gProjectFull, "png") &
-      ' ' & changeFileExt(gProjectFull, "dot"))
+when not defined(leanCompiler):
+  import docgen
 
-proc commandCheck =
-  msgs.gErrorMax = high(int)  # do not stop after first error
-  semanticPasses()            # use an empty backend for semantic checking only
-  rodPass()
-  compileProject()
+proc writeDepsFile(g: ModuleGraph) =
+  let fname = g.config.nimcacheDir / RelativeFile(g.config.projectName & ".deps")
+  let f = open(fname.string, fmWrite)
+  for m in g.ifaces:
+    if m.module != nil:
+      f.writeLine(toFullPath(g.config, m.module.position.FileIndex))
+  for k in g.inclToMod.keys:
+    if g.getModule(k).isNil:  # don't repeat includes which are also modules
+      f.writeLine(toFullPath(g.config, k))
+  f.close()
 
-proc commandDoc2 =
-  msgs.gErrorMax = high(int)  # do not stop after first error
-  semanticPasses()
-  registerPass(docgen2Pass)
-  #registerPass(cleanupPass())
-  compileProject()
-  finishDoc2Pass(gProjectName)
+proc writeCMakeDepsFile(conf: ConfigRef) =
+  ## write a list of C files for build systems like CMake.
+  ## only updated when the C file list changes.
+  let fname = getNimcacheDir(conf) / conf.outFile.changeFileExt("cdeps")
+  # generate output files list
+  var cfiles: seq[string] = @[]
+  for it in conf.toCompile: cfiles.add(it.cname.string)
+  let fileset = cfiles.toCountTable()
+  # read old cfiles list
+  var fl: File
+  var prevset = initCountTable[string]()
+  if open(fl, fname.string, fmRead):
+    for line in fl.lines: prevset.inc(line)
+    fl.close()
+  # write cfiles out
+  if fileset != prevset:
+    fl = open(fname.string, fmWrite)
+    for line in cfiles: fl.writeLine(line)
+    fl.close()
 
-proc commandCompileToC =
-  extccomp.initVars()
-  semanticPasses()
-  registerPass(cgenPass)
-  rodPass()
-  #registerPass(cleanupPass())
+proc commandGenDepend(graph: ModuleGraph) =
+  setPipeLinePass(graph, GenDependPass)
+  compilePipelineProject(graph)
+  let project = graph.config.projectFull
+  writeDepsFile(graph)
+  generateDot(graph, project)
 
-  compileProject()
-  cgenWriteModules()
-  if gCmd != cmdRun:
-    extccomp.callCCompiler(changeFileExt(gProjectFull, ""))
+  # dot in graphivz tool kit is required
+  let graphvizDotPath = findExe("dot")
+  if graphvizDotPath.len == 0:
+    quit("gendepend: Graphviz's tool dot is required," &
+    "see https://graphviz.org/download for downloading")
 
-  if isServing:
-    # caas will keep track only of the compilation commands
-    lastCaasCmd = curCaasCmd
-    resetCgenModules()
-    for i in 0 .. <gMemCacheData.len:
-      gMemCacheData[i].hashStatus = hashCached
-      gMemCacheData[i].needsRecompile = Maybe
+  execExternalProgram(graph.config, "dot -Tpng -o" &
+      changeFileExt(project, "png").string &
+      ' ' & changeFileExt(project, "dot").string)
 
-      # XXX: clean these global vars
-      # ccgstmts.gBreakpoints
-      # ccgthreadvars.nimtv
-      # ccgthreadvars.nimtVDeps
-      # ccgthreadvars.nimtvDeclared
-      # cgendata
-      # cgmeth?
-      # condsyms?
-      # depends?
-      # lexer.gLinesCompiled
-      # msgs - error counts
-      # magicsys, when system.nim changes
-      # rodread.rodcompilerProcs
-      # rodread.gTypeTable
-      # rodread.gMods
+proc commandCheck(graph: ModuleGraph) =
+  let conf = graph.config
+  conf.setErrorMaxHighMaybe
+  defineSymbol(conf.symbols, "nimcheck")
+  if optWasNimscript in conf.globalOptions:
+    defineSymbol(conf.symbols, "nimscript")
+    defineSymbol(conf.symbols, "nimconfig")
+  elif conf.backend == backendJs:
+    setTarget(conf.target, osJS, cpuJS)
+  setPipeLinePass(graph, SemPass)
+  compilePipelineProject(graph)
 
-      # !! ropes.cache
-      # semthreads.computed?
-      #
-      # suggest.usageSym
-      #
-      # XXX: can we run out of IDs?
-      # XXX: detect config reloading (implement as error/require restart)
-      # XXX: options are appended (they will accumulate over time)
-    resetCompilationLists()
-    ccgutils.resetCaches()
-    GC_fullCollect()
+  if conf.symbolFiles != disabledSf:
+    case conf.ideCmd
+    of ideDef: navDefinition(graph)
+    of ideUse: navUsages(graph)
+    of ideDus: navDefusages(graph)
+    else: discard
+    writeRodFiles(graph)
 
-proc commandCompileToJS =
-  #incl(gGlobalOptions, optSafeCode)
-  setTarget(osJS, cpuJS)
-  #initDefines()
-  defineSymbol("nimrod") # 'nimrod' is always defined
-  defineSymbol("ecmascript") # For backward compatibility
-  defineSymbol("js")
-  semanticPasses()
-  registerPass(JSgenPass)
-  compileProject()
+when not defined(leanCompiler):
+  proc commandDoc2(graph: ModuleGraph; ext: string) =
+    handleDocOutputOptions graph.config
+    graph.config.setErrorMaxHighMaybe
+    case ext:
+    of TexExt:
+      setPipeLinePass(graph, Docgen2TexPass)
+    of JsonExt:
+      setPipeLinePass(graph, Docgen2JsonPass)
+    of HtmlExt:
+      setPipeLinePass(graph, Docgen2Pass)
+    else: doAssert false, $ext
+    compilePipelineProject(graph)
 
-proc interactivePasses =
-  #incl(gGlobalOptions, optSafeCode)
-  #setTarget(osNimrodVM, cpuNimrodVM)
-  initDefines()
-  defineSymbol("nimscript")
-  when hasFFI: defineSymbol("nimffi")
-  registerPass(verbosePass)
-  registerPass(semPass)
-  registerPass(evalPass)
+proc commandCompileToC(graph: ModuleGraph) =
+  let conf = graph.config
+  extccomp.initVars(conf)
+  if conf.symbolFiles == disabledSf:
+    if {optRun, optForceFullMake} * conf.globalOptions == {optRun} or isDefined(conf, "nimBetterRun"):
+      if not changeDetectedViaJsonBuildInstructions(conf, conf.jsonBuildInstructionsFile):
+        # nothing changed
+        graph.config.notes = graph.config.mainPackageNotes
+        return
 
-proc commandInteractive =
-  msgs.gErrorMax = high(int)  # do not stop after first error
-  interactivePasses()
-  compileSystemModule()
-  if commandArgs.len > 0:
-    discard compileModule(fileInfoIdx(gProjectFull), {})
+  if not extccomp.ccHasSaneOverflow(conf):
+    conf.symbols.defineSymbol("nimEmulateOverflowChecks")
+
+  if conf.symbolFiles == disabledSf:
+    setPipeLinePass(graph, CgenPass)
   else:
-    var m = makeStdinModule()
+    setPipeLinePass(graph, SemPass)
+  compilePipelineProject(graph)
+  if graph.config.errorCounter > 0:
+    return # issue #9933
+  if conf.symbolFiles == disabledSf:
+    cgenWriteModules(graph.backend, conf)
+  else:
+    if isDefined(conf, "nimIcIntegrityChecks"):
+      checkIntegrity(graph)
+    generateCode(graph)
+    # graph.backend can be nil under IC when nothing changed at all:
+    if graph.backend != nil:
+      cgenWriteModules(graph.backend, conf)
+  if conf.cmd != cmdTcc and graph.backend != nil:
+    extccomp.callCCompiler(conf)
+    # for now we do not support writing out a .json file with the build instructions when HCR is on
+    if not conf.hcrOn:
+      extccomp.writeJsonBuildInstructions(conf)
+    if optGenScript in graph.config.globalOptions:
+      writeDepsFile(graph)
+    if optGenCDeps in graph.config.globalOptions:
+      writeCMakeDepsFile(conf)
+
+proc commandJsonScript(graph: ModuleGraph) =
+  extccomp.runJsonBuildInstructions(graph.config, graph.config.jsonBuildInstructionsFile)
+
+proc commandCompileToJS(graph: ModuleGraph) =
+  let conf = graph.config
+  when defined(leanCompiler):
+    globalError(conf, unknownLineInfo, "compiler wasn't built with JS code generator")
+  else:
+    conf.exc = excCpp
+    setTarget(conf.target, osJS, cpuJS)
+    defineSymbol(conf.symbols, "ecmascript") # For backward compatibility
+    setPipeLinePass(graph, JSgenPass)
+    compilePipelineProject(graph)
+    if optGenScript in conf.globalOptions:
+      writeDepsFile(graph)
+
+proc commandInteractive(graph: ModuleGraph) =
+  graph.config.setErrorMaxHighMaybe
+  initDefines(graph.config.symbols)
+  defineSymbol(graph.config.symbols, "nimscript")
+  # note: seems redundant with -d:nimHasLibFFI
+  when hasFFI: defineSymbol(graph.config.symbols, "nimffi")
+  setPipeLinePass(graph, InterpreterPass)
+  compilePipelineSystemModule(graph)
+  if graph.config.commandArgs.len > 0:
+    discard graph.compilePipelineModule(fileInfoIdx(graph.config, graph.config.projectFull), {})
+  else:
+    var m = graph.makeStdinModule()
     incl(m.flags, sfMainModule)
-    processModule(m, llStreamOpenStdIn(), nil)
+    var idgen = IdGenerator(module: m.itemId.module, symId: m.itemId.item, typeId: 0)
+    let s = llStreamOpenStdIn(onPrompt = proc() = flushDot(graph.config))
+    discard processPipelineModule(graph, m, idgen, s)
 
-const evalPasses = [verbosePass, semPass, evalPass]
-
-proc evalNim(nodes: PNode, module: PSym) =
-  carryPasses(nodes, module, evalPasses)
-
-proc commandEval(exp: string) =
-  if systemModule == nil:
-    interactivePasses()
-    compileSystemModule()
-  var echoExp = "echo \"eval\\t\", " & "repr(" & exp & ")"
-  evalNim(echoExp.parseString, makeStdinModule())
-
-proc commandScan =
-  var f = addFileExt(mainCommandArg(), NimExt)
+proc commandScan(cache: IdentCache, config: ConfigRef) =
+  var f = addFileExt(AbsoluteFile mainCommandArg(config), NimExt)
   var stream = llStreamOpen(f, fmRead)
   if stream != nil:
     var
-      L: TLexer
-      tok: TToken
+      L: Lexer
+      tok: Token
     initToken(tok)
-    openLexer(L, f, stream)
+    openLexer(L, f, stream, cache, config)
     while true:
       rawGetTok(L, tok)
-      printTok(tok)
+      printTok(config, tok)
       if tok.tokType == tkEof: break
     closeLexer(L)
   else:
-    rawMessage(errCannotOpenFile, f)
+    rawMessage(config, errGenerated, "cannot open file: " & f.string)
 
-proc commandSuggest =
-  if isServing:
-    # XXX: hacky work-around ahead
-    # Currently, it's possible to issue a idetools command, before
-    # issuing the first compile command. This will leave the compiler
-    # cache in a state where "no recompilation is necessary", but the
-    # cgen pass was never executed at all.
-    commandCompileToC()
-    let gDirtyBufferIdx = gTrackPos.fileIndex
-    discard compileModule(gDirtyBufferIdx, {sfDirty})
-    resetModule(gDirtyBufferIdx)
-  else:
-    msgs.gErrorMax = high(int)  # do not stop after first error
-    semanticPasses()
-    rodPass()
-    # XXX: this handles the case when the dirty buffer is the main file,
-    # but doesn't handle the case when it's imported module
-    #var projFile = if gProjectMainIdx == gDirtyOriginalIdx: gDirtyBufferIdx
-    #               else: gProjectMainIdx
-    compileProject() #(projFile)
-
-proc resetMemory =
-  resetCompilationLists()
-  ccgutils.resetCaches()
-  resetAllModules()
-  resetRopeCache()
-  resetSysTypes()
-  gOwners = @[]
-  for i in low(buckets)..high(buckets):
-    buckets[i] = nil
-  idAnon = nil
-
-  # XXX: clean these global vars
-  # ccgstmts.gBreakpoints
-  # ccgthreadvars.nimtv
-  # ccgthreadvars.nimtVDeps
-  # ccgthreadvars.nimtvDeclared
-  # cgendata
-  # cgmeth?
-  # condsyms?
-  # depends?
-  # lexer.gLinesCompiled
-  # msgs - error counts
-  # magicsys, when system.nim changes
-  # rodread.rodcompilerProcs
-  # rodread.gTypeTable
-  # rodread.gMods
-
-  # !! ropes.cache
-  #
-  # suggest.usageSym
-  #
-  # XXX: can we run out of IDs?
-  # XXX: detect config reloading (implement as error/require restart)
-  # XXX: options are appended (they will accumulate over time)
-  # vis = visimpl
-  when compileOption("gc", "v2"):
-    gcDebugging = true
-    echo "COLLECT 1"
-    GC_fullCollect()
-    echo "COLLECT 2"
-    GC_fullCollect()
-    echo "COLLECT 3"
-    GC_fullCollect()
-    echo GC_getStatistics()
+proc commandView(graph: ModuleGraph) =
+  let f = toAbsolute(mainCommandArg(graph.config), AbsoluteDir getCurrentDir()).addFileExt(RodExt)
+  rodViewer(f, graph.config, graph.cache)
 
 const
-  SimulateCaasMemReset = false
   PrintRopeCacheStats = false
 
-proc mainCommand* =
-  when SimulateCaasMemReset:
-    gGlobalOptions.incl(optCaasEnabled)
+proc hashMainCompilationParams*(conf: ConfigRef): string =
+  ## doesn't have to be complete; worst case is a cache hit and recompilation.
+  var state = newSha1State()
+  with state:
+    update os.getAppFilename() # nim compiler
+    update conf.commandLine # excludes `arguments`, as it should
+    update $conf.projectFull # so that running `nim r main` from 2 directories caches differently
+  result = $SecureHash(state.finalize())
 
-  # In "nim serve" scenario, each command must reset the registered passes
-  clearPasses()
-  gLastCmdTime = epochTime()
-  appendStr(searchPaths, options.libpath)
-  if gProjectFull.len != 0:
-    # current path is always looked first for modules
-    prependStr(searchPaths, gProjectPath)
-  setId(100)
-  case command.normalize
-  of "c", "cc", "compile", "compiletoc":
-    # compile means compileToC currently
-    gCmd = cmdCompileToC
-    commandCompileToC()
-  of "cpp", "compiletocpp":
-    gCmd = cmdCompileToCpp
-    defineSymbol("cpp")
-    commandCompileToC()
-  of "objc", "compiletooc":
-    gCmd = cmdCompileToOC
-    defineSymbol("objc")
-    commandCompileToC()
-  of "run":
-    gCmd = cmdRun
-    when hasTinyCBackend:
-      extccomp.setCC("tcc")
-      commandCompileToC()
+proc setOutFile*(conf: ConfigRef) =
+  proc libNameTmpl(conf: ConfigRef): string {.inline.} =
+    result = if conf.target.targetOS == osWindows: "$1.lib" else: "lib$1.a"
+
+  if conf.outFile.isEmpty:
+    var base = conf.projectName
+    if optUseNimcache in conf.globalOptions:
+      base.add "_" & hashMainCompilationParams(conf)
+    let targetName =
+      if conf.backend == backendJs: base & ".js"
+      elif optGenDynLib in conf.globalOptions:
+        platform.OS[conf.target.targetOS].dllFrmt % base
+      elif optGenStaticLib in conf.globalOptions: libNameTmpl(conf) % base
+      else: base & platform.OS[conf.target.targetOS].exeExt
+    conf.outFile = RelativeFile targetName
+
+proc mainCommand*(graph: ModuleGraph) =
+  let conf = graph.config
+  let cache = graph.cache
+
+  conf.lastCmdTime = epochTime()
+  conf.searchPaths.add(conf.libpath)
+
+  proc customizeForBackend(backend: TBackend) =
+    ## Sets backend specific options but don't compile to backend yet in
+    ## case command doesn't require it. This must be called by all commands.
+    if conf.backend == backendInvalid:
+      # only set if wasn't already set, to allow override via `nim c -b:cpp`
+      conf.backend = backend
+
+    defineSymbol(graph.config.symbols, $conf.backend)
+    case conf.backend
+    of backendC:
+      if conf.exc == excNone: conf.exc = excSetjmp
+    of backendCpp:
+      if conf.exc == excNone: conf.exc = excCpp
+    of backendObjc: discard
+    of backendJs:
+      if conf.hcrOn:
+        # XXX: At the moment, system.nim cannot be compiled in JS mode
+        # with "-d:useNimRtl". The HCR option has been processed earlier
+        # and it has added this define implictly, so we must undo that here.
+        # A better solution might be to fix system.nim
+        undefSymbol(conf.symbols, "useNimRtl")
+    of backendInvalid: doAssert false
+
+  proc compileToBackend() =
+    customizeForBackend(conf.backend)
+    setOutFile(conf)
+    case conf.backend
+    of backendC: commandCompileToC(graph)
+    of backendCpp: commandCompileToC(graph)
+    of backendObjc: commandCompileToC(graph)
+    of backendJs: commandCompileToJS(graph)
+    of backendInvalid: doAssert false
+
+  template docLikeCmd(body) =
+    when defined(leanCompiler):
+      conf.quitOrRaise "compiler wasn't built with documentation generator"
     else:
-      rawMessage(errInvalidCommandX, command)
-  of "js", "compiletojs":
-    gCmd = cmdCompileToJS
-    commandCompileToJS()
-  of "doc":
-    wantMainModule()
-    gCmd = cmdDoc
-    loadConfigs(DocConfig)
-    commandDoc()
-  of "doc2":
-    gCmd = cmdDoc
-    loadConfigs(DocConfig)
-    defineSymbol("nimdoc")
-    commandDoc2()
-  of "rst2html":
-    gCmd = cmdRst2html
-    loadConfigs(DocConfig)
-    commandRst2Html()
-  of "rst2tex":
-    gCmd = cmdRst2tex
-    loadConfigs(DocTexConfig)
-    commandRst2TeX()
-  of "jsondoc":
-    wantMainModule()
-    gCmd = cmdDoc
-    loadConfigs(DocConfig)
-    wantMainModule()
-    defineSymbol("nimdoc")
-    commandJSON()
-  of "buildindex":
-    gCmd = cmdDoc
-    loadConfigs(DocConfig)
-    commandBuildIndex()
-  of "gendepend":
-    gCmd = cmdGenDepend
-    commandGenDepend()
-  of "dump":
-    gCmd = cmdDump
-    if getConfigVar("dump.format") == "json":
-      wantMainModule()
+      wantMainModule(conf)
+      let docConf = if conf.cmd == cmdDoc2tex: DocTexConfig else: DocConfig
+      loadConfigs(docConf, cache, conf, graph.idgen)
+      defineSymbol(conf.symbols, "nimdoc")
+      body
+
+  ## command prepass
+  if conf.cmd == cmdCrun: conf.globalOptions.incl {optRun, optUseNimcache}
+  if conf.cmd notin cmdBackends + {cmdTcc}: customizeForBackend(backendC)
+  if conf.outDir.isEmpty:
+    # doc like commands can generate a lot of files (especially with --project)
+    # so by default should not end up in $PWD nor in $projectPath.
+    var ret = if optUseNimcache in conf.globalOptions: getNimcacheDir(conf)
+              else: conf.projectPath
+    doAssert ret.string.isAbsolute # `AbsoluteDir` is not a real guarantee
+    if conf.cmd in cmdDocLike + {cmdRst2html, cmdRst2tex, cmdMd2html, cmdMd2tex}:
+      ret = ret / htmldocsDir
+    conf.outDir = ret
+
+  ## process all commands
+  case conf.cmd
+  of cmdBackends: compileToBackend()
+  of cmdTcc:
+    when hasTinyCBackend:
+      extccomp.setCC(conf, "tcc", unknownLineInfo)
+      if conf.backend != backendC:
+        rawMessage(conf, errGenerated, "'run' requires c backend, got: '$1'" % $conf.backend)
+      compileToBackend()
+    else:
+      rawMessage(conf, errGenerated, "'run' command not available; rebuild with -d:tinyc")
+  of cmdDoc0: docLikeCmd commandDoc(cache, conf)
+  of cmdDoc:
+    docLikeCmd():
+      conf.setNoteDefaults(warnRstRedefinitionOfLabel, false) # issue #13218
+        # because currently generates lots of false positives due to conflation
+        # of labels links in doc comments, e.g. for random.rand:
+        #  ## * `rand proc<#rand,Rand,Natural>`_ that returns an integer
+        #  ## * `rand proc<#rand,Rand,range[]>`_ that returns a float
+      commandDoc2(graph, HtmlExt)
+      if optGenIndex in conf.globalOptions and optWholeProject in conf.globalOptions:
+        commandBuildIndex(conf, $conf.outDir)
+  of cmdRst2html, cmdMd2html:
+    # XXX: why are warnings disabled by default for rst2html and rst2tex?
+    for warn in rstWarnings:
+      conf.setNoteDefaults(warn, true)
+    conf.setNoteDefaults(warnRstRedefinitionOfLabel, false) # similar to issue #13218
+    when defined(leanCompiler):
+      conf.quitOrRaise "compiler wasn't built with documentation generator"
+    else:
+      loadConfigs(DocConfig, cache, conf, graph.idgen)
+      commandRst2Html(cache, conf, preferMarkdown = (conf.cmd == cmdMd2html))
+  of cmdRst2tex, cmdMd2tex, cmdDoc2tex:
+    for warn in rstWarnings:
+      conf.setNoteDefaults(warn, true)
+    when defined(leanCompiler):
+      conf.quitOrRaise "compiler wasn't built with documentation generator"
+    else:
+      if conf.cmd in {cmdRst2tex, cmdMd2tex}:
+        loadConfigs(DocTexConfig, cache, conf, graph.idgen)
+        commandRst2TeX(cache, conf, preferMarkdown = (conf.cmd == cmdMd2tex))
+      else:
+        docLikeCmd commandDoc2(graph, TexExt)
+  of cmdJsondoc0: docLikeCmd commandJson(cache, conf)
+  of cmdJsondoc:
+    docLikeCmd():
+      commandDoc2(graph, JsonExt)
+      if optGenIndex in conf.globalOptions and optWholeProject in conf.globalOptions:
+        commandBuildIndexJson(conf, $conf.outDir)
+  of cmdCtags: docLikeCmd commandTags(cache, conf)
+  of cmdBuildindex: docLikeCmd commandBuildIndex(conf, $conf.projectFull, conf.outFile)
+  of cmdGendepend: commandGenDepend(graph)
+  of cmdDump:
+    if getConfigVar(conf, "dump.format") == "json":
+      wantMainModule(conf)
 
       var definedSymbols = newJArray()
-      for s in definedSymbolNames(): definedSymbols.elems.add(%s)
+      for s in definedSymbolNames(conf.symbols): definedSymbols.elems.add(%s)
 
       var libpaths = newJArray()
-      for dir in iterSearchPath(searchPaths): libpaths.elems.add(%dir)
+      var lazyPaths = newJArray()
+      for dir in conf.searchPaths: libpaths.elems.add(%dir.string)
+      for dir in conf.lazyPaths: lazyPaths.elems.add(%dir.string)
 
-      var dumpdata = % [
+      var hints = newJObject() # consider factoring with `listHints`
+      for a in hintMin..hintMax:
+        hints[$a] = %(a in conf.notes)
+      var warnings = newJObject()
+      for a in warnMin..warnMax:
+        warnings[$a] = %(a in conf.notes)
+
+      var dumpdata = %[
         (key: "version", val: %VersionAsString),
-        (key: "project_path", val: %gProjectFull),
+        (key: "nimExe", val: %(getAppFilename())),
+        (key: "prefixdir", val: %conf.getPrefixDir().string),
+        (key: "libpath", val: %conf.libpath.string),
+        (key: "project_path", val: %conf.projectFull.string),
         (key: "defined_symbols", val: definedSymbols),
-        (key: "lib_paths", val: libpaths)
+        (key: "lib_paths", val: %libpaths),
+        (key: "lazyPaths", val: %lazyPaths),
+        (key: "outdir", val: %conf.outDir.string),
+        (key: "out", val: %conf.outFile.string),
+        (key: "nimcache", val: %getNimcacheDir(conf).string),
+        (key: "hints", val: hints),
+        (key: "warnings", val: warnings),
       ]
 
-      msgWriteln($dumpdata, {msgStdout, msgSkipHook})
+      msgWriteln(conf, $dumpdata, {msgStdout, msgSkipHook, msgNoUnitSep})
+        # `msgNoUnitSep` to avoid generating invalid json, refs bug #17853
     else:
-      msgWriteln("-- list of currently defined symbols --",
-                 {msgStdout, msgSkipHook})
-      for s in definedSymbolNames(): msgWriteln(s, {msgStdout, msgSkipHook})
-      msgWriteln("-- end of list --", {msgStdout, msgSkipHook})
+      msgWriteln(conf, "-- list of currently defined symbols --",
+                 {msgStdout, msgSkipHook, msgNoUnitSep})
+      for s in definedSymbolNames(conf.symbols): msgWriteln(conf, s, {msgStdout, msgSkipHook, msgNoUnitSep})
+      msgWriteln(conf, "-- end of list --", {msgStdout, msgSkipHook})
 
-      for it in iterSearchPath(searchPaths): msgWriteln(it)
-  of "check":
-    gCmd = cmdCheck
-    commandCheck()
-  of "parse":
-    gCmd = cmdParse
-    wantMainModule()
-    discard parseFile(gProjectMainIdx)
-  of "scan":
-    gCmd = cmdScan
-    wantMainModule()
-    commandScan()
-    msgWriteln("Beware: Indentation tokens depend on the parser\'s state!")
-  of "secret":
-    gCmd = cmdInteractive
-    commandInteractive()
-  of "e":
-    # XXX: temporary command for easier testing
-    commandEval(mainCommandArg())
-  of "reset":
-    resetMemory()
-  of "idetools":
-    gCmd = cmdIdeTools
-    if gEvalExpr != "":
-      commandEval(gEvalExpr)
-    else:
-      commandSuggest()
-  of "serve":
-    isServing = true
-    gGlobalOptions.incl(optCaasEnabled)
-    msgs.gErrorMax = high(int)  # do not stop after first error
-    serve(mainCommand)
-  of "nop", "help":
-    # prevent the "success" message:
-    gCmd = cmdDump
-  else:
-    rawMessage(errInvalidCommandX, command)
+      for it in conf.searchPaths: msgWriteln(conf, it.string)
+  of cmdCheck:
+    commandCheck(graph)
+  of cmdParse:
+    wantMainModule(conf)
+    discard parseFile(conf.projectMainIdx, cache, conf)
+  of cmdRod:
+    wantMainModule(conf)
+    commandView(graph)
+    #msgWriteln(conf, "Beware: Indentation tokens depend on the parser's state!")
+  of cmdInteractive: commandInteractive(graph)
+  of cmdNimscript:
+    if conf.projectIsCmd or conf.projectIsStdin: discard
+    elif not fileExists(conf.projectFull):
+      rawMessage(conf, errGenerated, "NimScript file does not exist: " & conf.projectFull.string)
+    # main NimScript logic handled in `loadConfigs`.
+  of cmdNop: discard
+  of cmdJsonscript:
+    setOutFile(graph.config)
+    commandJsonScript(graph)
+  of cmdUnknown, cmdNone, cmdIdeTools, cmdNimfix:
+    rawMessage(conf, errGenerated, "invalid command: " & conf.command)
 
-  if msgs.gErrorCounter == 0 and
-     gCmd notin {cmdInterpret, cmdRun, cmdDump}:
-    rawMessage(hintSuccessX, [$gLinesCompiled,
-               formatFloat(epochTime() - gLastCmdTime, ffDecimal, 3),
-               formatSize(getTotalMem()),
-               if condSyms.isDefined("release"): "Release Build"
-               else: "Debug Build"])
+  if conf.errorCounter == 0 and conf.cmd notin {cmdTcc, cmdDump, cmdNop}:
+    if optProfileVM in conf.globalOptions:
+      echo conf.dump(conf.vmProfileData)
+    genSuccessX(conf)
 
   when PrintRopeCacheStats:
     echo "rope cache stats: "
@@ -377,8 +430,3 @@ proc mainCommand* =
     echo "  int tries: ", gCacheIntTries
     echo "  efficiency: ", formatFloat(1-(gCacheMisses.float/gCacheTries.float),
                                        ffDecimal, 3)
-
-  when SimulateCaasMemReset:
-    resetMemory()
-
-  resetAttributes()

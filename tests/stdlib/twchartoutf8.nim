@@ -1,6 +1,9 @@
 discard """
+  matrix: "--mm:refc; --mm:orc"
   output: '''OK'''
 """
+
+import std/[syncio, assertions]
 
 #assume WideCharToMultiByte always produce correct result
 #windows only
@@ -8,6 +11,7 @@ discard """
 when not defined(windows):
   echo "OK"
 else:
+  import std/widestrs
   {.push gcsafe.}
 
   const CP_UTF8 = 65001'i32
@@ -30,7 +34,6 @@ else:
     result = newString(size)
     let res = WideCharToMultiByte(CP_UTF8, 0'i32, cast[LPWCSTR](addr(wc[0])), wclen,
       cstring(result), size, cstring(nil), LPBOOL(nil))
-    result[size] = chr(0)
     doAssert size == res
 
   proc testCP(wc: WideCString, lo, hi: int) =
@@ -67,8 +70,7 @@ else:
 
   #RFC-2781 "UTF-16, an encoding of ISO 10646"
 
-  var wc: WideCString
-  unsafeNew(wc, 1024 * 4 + 2)
+  var wc: WideCString = newWideCString(1024 * 2)
 
   #U+0000 to U+D7FF
   #skip the U+0000

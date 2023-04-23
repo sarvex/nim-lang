@@ -1,9 +1,10 @@
 discard """
+  nimout: '''
+  found 'a' [var declared in tnoop.nim(10, 3)]
+  '''
   file: "tnoop.nim"
-  line: 11
-  errormsg: "attempting to call undeclared routine: 'a'"
+  errormsg: "attempting to call routine: 'a'"
 """
-
 
 var
   a: int

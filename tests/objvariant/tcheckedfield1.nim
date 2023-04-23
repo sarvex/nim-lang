@@ -1,12 +1,13 @@
 discard """
-  msg: "Warning: cannot prove that field 'x.s' is accessible [ProveField]"
-  line:51
+  nimout: "tcheckedfield1.nim(39, 6) Warning: cannot prove that field 'x.s' is accessible [ProveField]"
+  action: run
+  output: "abc abc"
 """
 
 import strutils
 
 {.warning[ProveField]: on.}
-
+{.experimental: "notnil".}
 type
   TNodeKind = enum
     nkBinary, nkTernary, nkStr

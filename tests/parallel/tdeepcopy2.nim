@@ -1,7 +1,10 @@
 discard """
-  output: '''called deepCopy for int
+  matrix: "--mm:refc"
+  output: '''
 called deepCopy for int
-done999 999'''
+called deepCopy for int
+done999 999
+'''
 """
 
 import threadpool
@@ -11,7 +14,7 @@ type
   Bar[T] = object
     x: T
 
-proc deepCopy[T](b: ref Bar[T]): ref Bar[T] {.override.} =
+proc `=deepCopy`[T](b: ref Bar[T]): ref Bar[T] =
   result.new
   result.x = b.x
   when T is int:

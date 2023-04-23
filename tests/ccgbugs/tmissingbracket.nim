@@ -1,6 +1,8 @@
 discard """
-  output: '''Subobject test called
-5'''
+output: '''
+Subobject test called
+5
+'''
 """
 
 type
@@ -9,7 +11,7 @@ type
     className* : string
   TClassOfTobj = object of TClassOfTCustomObject
     nil
-  TCustomObject = ref object {.inheritable.}
+  TCustomObject {.inheritable.} = ref object
     class* : ptr TClassOfTCustomObject
   TObj = ref object of TCustomObject
     data: int
@@ -38,7 +40,7 @@ type
         t:int
     SubObject* = object of TestObj
 
-method test*(t:var TestObj) =
+method test*(t:var TestObj) {.base.} =
     echo "test called"
 
 method test*(t:var SubObject) =
@@ -49,4 +51,3 @@ var a: SubObject
 
 a.test()
 echo a.t
-

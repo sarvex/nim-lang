@@ -1,6 +1,9 @@
 discard """
-  file: "tbintree.nim"
-  output: "helloworld99110223"
+  output: '''hello
+world
+99
+110
+223'''
 """
 type
   TBinaryTree[T] = object      # TBinaryTree is a generic type with
@@ -52,8 +55,8 @@ proc find*[Ty2](b: PBinaryTree[Ty2], data: Ty2): bool =
 
 iterator preorder*[T](root: PBinaryTree[T]): T =
   # Preorder traversal of a binary tree.
-  # Since recursive iterators are not yet implemented,
-  # this uses an explicit stack:
+  # This uses an explicit stack (which is more efficient than
+  # a recursive iterator factory).
   var stack: seq[PBinaryTree[T]] = @[root]
   while stack.len > 0:
     var n = stack.pop()
@@ -82,7 +85,7 @@ proc debug[T](a: PBinaryTree[T]) =
     echo a.data
     debug(a.ri)
 
-when isMainModule:
+when true:
   var
     root: PBinaryTree[string]
     x = newNode("hello")
@@ -90,9 +93,9 @@ when isMainModule:
   add(root, "world")
   if find(root, "world"):
     for str in items(root):
-      stdout.write(str)
+      echo(str)
   else:
-    stdout.writeLine("BUG")
+    echo("BUG")
 
   var
     r2: PBinaryTree[int]
@@ -100,8 +103,4 @@ when isMainModule:
   add(r2, 223)
   add(r2, 99)
   for y in items(r2):
-    stdout.write(y)
-
-#OUT helloworld99110223
-
-
+    echo(y)

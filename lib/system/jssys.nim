@@ -1,16 +1,14 @@
 #
 #
 #            Nim's Runtime Library
-#        (c) Copyright 2012 Andreas Rumpf
+#        (c) Copyright 2015 Andreas Rumpf
 #
 #    See the file "copying.txt", included in this
 #    distribution, for details about the copyright.
 #
 
-when defined(nodejs):
-  proc alert*(s: cstring) {.importc: "console.log", nodecl.}
-else:
-  proc alert*(s: cstring) {.importc, nodecl.}
+include system/indexerrors
+import std/private/miscdollars
 
 proc log*(s: cstring) {.importc: "console.log", varargs, nodecl.}
 
@@ -36,8 +34,6 @@ type
 
   JSRef = ref RootObj # Fake type.
 
-{.deprecated: [TSafePoint: SafePoint, TCallFrame: CallFrame].}
-
 var
   framePtr {.importc, nodecl, volatile.}: PCallFrame
   excHandler {.importc, nodecl, volatile.}: int = 0
@@ -52,24 +48,42 @@ proc nimCharToStr(x: char): string {.compilerproc.} =
   result = newString(1)
   result[0] = x
 
+proc isNimException(): bool {.asmNoStackFrame.} =
+  asm "return `lastJSError` && `lastJSError`.m_type;"
+
+proc getCurrentException*(): ref Exception {.compilerRtl, benign.} =
+  if isNimException(): result = cast[ref Exception](lastJSError)
+
 proc getCurrentExceptionMsg*(): string =
   if lastJSError != nil:
-    return $lastJSError.message
-  else:
-    return ""
+    if isNimException():
+      return cast[Exception](lastJSError).msg
+    else:
+      var msg: cstring
+      {.emit: """
+      if (`lastJSError`.message !== undefined) {
+        `msg` = `lastJSError`.message;
+      }
+      """.}
+      if not msg.isNil:
+        return $msg
+  return ""
+
+proc setCurrentException*(exc: ref Exception) =
+  lastJSError = cast[PJSError](exc)
 
 proc auxWriteStackTrace(f: PCallFrame): string =
   type
-    TempFrame = tuple[procname: cstring, line: int]
-  {.deprecated: [TTempFrame: TempFrame].}
+    TempFrame = tuple[procname: cstring, line: int, filename: cstring]
   var
     it = f
     i = 0
     total = 0
-    tempFrames: array [0..63, TempFrame]
+    tempFrames: array[0..63, TempFrame]
   while it != nil and i <= high(tempFrames):
     tempFrames[i].procname = it.procname
     tempFrames[i].line = it.line
+    tempFrames[i].filename = it.filename
     inc(i)
     inc(total)
     it = it.prev
@@ -83,73 +97,85 @@ proc auxWriteStackTrace(f: PCallFrame): string =
     add(result, $(total-i))
     add(result, " calls omitted) ...\n")
   for j in countdown(i-1, 0):
+    result.toLocation($tempFrames[j].filename, tempFrames[j].line, 0)
+    add(result, " at ")
     add(result, tempFrames[j].procname)
-    if tempFrames[j].line > 0:
-      add(result, ", line: ")
-      add(result, $tempFrames[j].line)
     add(result, "\n")
 
 proc rawWriteStackTrace(): string =
   if framePtr != nil:
     result = "Traceback (most recent call last)\n" & auxWriteStackTrace(framePtr)
-    framePtr = nil
-  elif lastJSError != nil:
-    result = $lastJSError.stack
   else:
     result = "No stack traceback available\n"
 
+proc writeStackTrace() =
+  var trace = rawWriteStackTrace()
+  trace.setLen(trace.len - 1)
+  echo trace
+
+proc getStackTrace*(): string = rawWriteStackTrace()
+proc getStackTrace*(e: ref Exception): string = e.trace
+
 proc unhandledException(e: ref Exception) {.
     compilerproc, asmNoStackFrame.} =
-  when NimStackTrace:
-    var buf = rawWriteStackTrace()
+  var buf = ""
+  if e.msg.len != 0:
+    add(buf, "Error: unhandled exception: ")
+    add(buf, e.msg)
   else:
-    var buf = ""
-    if e.msg != nil and e.msg[0] != '\0':
-      add(buf, "Error: unhandled exception: ")
-      add(buf, e.msg)
-    else:
-      add(buf, "Error: unhandled exception")
-    add(buf, " [")
-    add(buf, e.name)
-    add(buf, "]\n")
-    alert(buf)
+    add(buf, "Error: unhandled exception")
+  add(buf, " [")
+  add(buf, e.name)
+  add(buf, "]\n")
+  when NimStackTrace:
+    add(buf, rawWriteStackTrace())
+  let cbuf = cstring(buf)
+  when NimStackTrace:
+    framePtr = nil
+  {.emit: """
+  if (typeof(Error) !== "undefined") {
+    throw new Error(`cbuf`);
+  }
+  else {
+    throw `cbuf`;
+  }
+  """.}
 
 proc raiseException(e: ref Exception, ename: cstring) {.
     compilerproc, asmNoStackFrame.} =
   e.name = ename
-  when not defined(noUnhandledHandler):
-    if excHandler == 0:
-      unhandledException(e)
+  if excHandler == 0:
+    unhandledException(e)
+  when NimStackTrace:
+    e.trace = rawWriteStackTrace()
   asm "throw `e`;"
 
 proc reraiseException() {.compilerproc, asmNoStackFrame.} =
   if lastJSError == nil:
-    raise newException(ReraiseError, "no exception to reraise")
+    raise newException(ReraiseDefect, "no exception to reraise")
   else:
-    when not defined(noUnhandledHandler):
-      if excHandler == 0:
-        var isNimException : bool
-        asm "`isNimException` = lastJSError.m_type;"
-        if isNimException:
-          unhandledException(cast[ref Exception](lastJSError))
+    if excHandler == 0:
+      if isNimException():
+        unhandledException(cast[ref Exception](lastJSError))
+
     asm "throw lastJSError;"
 
-proc raiseOverflow {.exportc: "raiseOverflow", noreturn.} =
-  raise newException(OverflowError, "over- or underflow")
+proc raiseOverflow {.exportc: "raiseOverflow", noreturn, compilerproc.} =
+  raise newException(OverflowDefect, "over- or underflow")
 
-proc raiseDivByZero {.exportc: "raiseDivByZero", noreturn.} =
-  raise newException(DivByZeroError, "division by zero")
+proc raiseDivByZero {.exportc: "raiseDivByZero", noreturn, compilerproc.} =
+  raise newException(DivByZeroDefect, "division by zero")
 
 proc raiseRangeError() {.compilerproc, noreturn.} =
-  raise newException(RangeError, "value out of range")
+  raise newException(RangeDefect, "value out of range")
 
-proc raiseIndexError() {.compilerproc, noreturn.} =
-  raise newException(IndexError, "index out of bounds")
+proc raiseIndexError(i, a, b: int) {.compilerproc, noreturn.} =
+  raise newException(IndexDefect, formatErrorIndexBound(int(i), int(a), int(b)))
 
-proc raiseFieldError(f: string) {.compilerproc, noreturn.} =
-  raise newException(FieldError, f & " is not accessible")
+proc raiseFieldError2(f: string, discVal: string) {.compilerproc, noreturn.} =
+  raise newException(FieldDefect, formatFieldDefect(f, discVal))
 
-proc SetConstr() {.varargs, asmNoStackFrame, compilerproc.} =
+proc setConstr() {.varargs, asmNoStackFrame, compilerproc.} =
   asm """
     var result = {};
     for (var i = 0; i < arguments.length; ++i) {
@@ -165,49 +191,94 @@ proc SetConstr() {.varargs, asmNoStackFrame, compilerproc.} =
     return result;
   """
 
-proc cstrToNimstr(c: cstring): string {.asmNoStackFrame, compilerproc.} =
-  asm """
-    var result = [];
-    for (var i = 0; i < `c`.length; ++i) {
-      result[i] = `c`.charCodeAt(i);
-    }
-    result[result.length] = 0; // terminating zero
-    return result;
-  """
+proc makeNimstrLit(c: cstring): string {.asmNoStackFrame, compilerproc.} =
+  {.emit: """
+  var result = [];
+  for (var i = 0; i < `c`.length; ++i) {
+    result[i] = `c`.charCodeAt(i);
+  }
+  return result;
+  """.}
 
-proc toJSStr(s: string): cstring {.asmNoStackFrame, compilerproc.} =
-  asm """
-    var len = `s`.length-1;
-    var asciiPart = new Array(len);
-    var fcc = String.fromCharCode;
-    var nonAsciiPart = null;
-    var nonAsciiOffset = 0;
-    for (var i = 0; i < len; ++i) {
-      if (nonAsciiPart !== null) {
-        var offset = (i - nonAsciiOffset) * 2;
-        nonAsciiPart[offset] = "%";
-        nonAsciiPart[offset + 1] = `s`[i].toString(16);
-      }
-      else if (`s`[i] < 128)
-        asciiPart[i] = fcc(`s`[i]);
-      else {
-        asciiPart.length = i;
-        nonAsciiOffset = i;
-        nonAsciiPart = new Array((len - i) * 2);
-        --i;
-      }
+proc cstrToNimstr(c: cstring): string {.asmNoStackFrame, compilerproc.} =
+  {.emit: """
+  var ln = `c`.length;
+  var result = new Array(ln);
+  var r = 0;
+  for (var i = 0; i < ln; ++i) {
+    var ch = `c`.charCodeAt(i);
+
+    if (ch < 128) {
+      result[r] = ch;
     }
-    asciiPart = asciiPart.join("");
-    return (nonAsciiPart === null) ?
-        asciiPart : asciiPart + decodeURIComponent(nonAsciiPart.join(""));
-  """
+    else {
+      if (ch < 2048) {
+        result[r] = (ch >> 6) | 192;
+      }
+      else {
+        if (ch < 55296 || ch >= 57344) {
+          result[r] = (ch >> 12) | 224;
+        }
+        else {
+            ++i;
+            ch = 65536 + (((ch & 1023) << 10) | (`c`.charCodeAt(i) & 1023));
+            result[r] = (ch >> 18) | 240;
+            ++r;
+            result[r] = ((ch >> 12) & 63) | 128;
+        }
+        ++r;
+        result[r] = ((ch >> 6) & 63) | 128;
+      }
+      ++r;
+      result[r] = (ch & 63) | 128;
+    }
+    ++r;
+  }
+  return result;
+  """.}
+
+proc toJSStr(s: string): cstring {.compilerproc.} =
+  proc fromCharCode(c: char): cstring {.importc: "String.fromCharCode".}
+  proc join(x: openArray[cstring]; d = cstring""): cstring {.
+    importcpp: "#.join(@)".}
+  proc decodeURIComponent(x: cstring): cstring {.
+    importc: "decodeURIComponent".}
+
+  proc toHexString(c: char; d = 16): cstring {.importcpp: "#.toString(@)".}
+
+  proc log(x: cstring) {.importc: "console.log".}
+
+  var res = newSeq[cstring](s.len)
+  var i = 0
+  var j = 0
+  while i < s.len:
+    var c = s[i]
+    if c < '\128':
+      res[j] = fromCharCode(c)
+      inc i
+    else:
+      var helper = newSeq[cstring]()
+      while true:
+        let code = toHexString(c)
+        if code.len == 1:
+          helper.add cstring"%0"
+        else:
+          helper.add cstring"%"
+        helper.add code
+        inc i
+        if i >= s.len or s[i] < '\128': break
+        c = s[i]
+      try:
+        res[j] = decodeURIComponent join(helper)
+      except:
+        res[j] = join(helper)
+    inc j
+  setLen(res, j)
+  result = join(res)
 
 proc mnewString(len: int): string {.asmNoStackFrame, compilerproc.} =
   asm """
-    var result = new Array(`len`+1);
-    result[0] = 0;
-    result[`len`] = 0;
-    return result;
+    return new Array(`len`);
   """
 
 proc SetCard(a: int): int {.compilerproc, asmNoStackFrame.} =
@@ -260,23 +331,31 @@ proc SetMinus(a, b: int): int {.compilerproc, asmNoStackFrame.} =
     return result;
   """
 
-proc cmpStrings(a, b: string): int {.asmNoStackFrame, compilerProc.} =
+proc cmpStrings(a, b: string): int {.asmNoStackFrame, compilerproc.} =
   asm """
     if (`a` == `b`) return 0;
     if (!`a`) return -1;
     if (!`b`) return 1;
-    for (var i = 0; i < `a`.length-1; ++i) {
+    for (var i = 0; i < `a`.length && i < `b`.length; i++) {
       var result = `a`[i] - `b`[i];
       if (result != 0) return result;
     }
-    return 0;
+    return `a`.length - `b`.length;
   """
 
-proc cmp(x, y: string): int = return cmpStrings(x, y)
+proc cmp(x, y: string): int =
+  when nimvm:
+    if x == y: result = 0
+    elif x < y: result = -1
+    else: result = 1
+  else:
+    result = cmpStrings(x, y)
 
-proc eqStrings(a, b: string): bool {.asmNoStackFrame, compilerProc.} =
+proc eqStrings(a, b: string): bool {.asmNoStackFrame, compilerproc.} =
   asm """
     if (`a` == `b`) return true;
+    if (`a` === null && `b`.length == 0) return true;
+    if (`b` === null && `a`.length == 0) return true;
     if ((!`a`) || (!`b`)) return false;
     var alen = `a`.length;
     if (alen != `b`.length) return false;
@@ -295,7 +374,7 @@ when defined(kwin):
       print(buf);
     """
 
-elif defined(nodejs):
+elif not defined(nimOldEcho):
   proc ewriteln(x: cstring) = log(x)
 
   proc rawEcho {.compilerproc, asmNoStackFrame.} =
@@ -332,24 +411,29 @@ else:
     """.}
 
 # Arithmetic:
+proc checkOverflowInt(a: int) {.asmNoStackFrame, compilerproc.} =
+  asm """
+    if (`a` > 2147483647 || `a` < -2147483648) `raiseOverflow`();
+  """
+
 proc addInt(a, b: int): int {.asmNoStackFrame, compilerproc.} =
   asm """
     var result = `a` + `b`;
-    if (result > 2147483647 || result < -2147483648) `raiseOverflow`();
+    `checkOverflowInt`(result);
     return result;
   """
 
 proc subInt(a, b: int): int {.asmNoStackFrame, compilerproc.} =
   asm """
     var result = `a` - `b`;
-    if (result > 2147483647 || result < -2147483648) `raiseOverflow`();
+    `checkOverflowInt`(result);
     return result;
   """
 
 proc mulInt(a, b: int): int {.asmNoStackFrame, compilerproc.} =
   asm """
     var result = `a` * `b`;
-    if (result > 2147483647 || result < -2147483648) `raiseOverflow`();
+    `checkOverflowInt`(result);
     return result;
   """
 
@@ -357,52 +441,54 @@ proc divInt(a, b: int): int {.asmNoStackFrame, compilerproc.} =
   asm """
     if (`b` == 0) `raiseDivByZero`();
     if (`b` == -1 && `a` == 2147483647) `raiseOverflow`();
-    return Math.floor(`a` / `b`);
+    return Math.trunc(`a` / `b`);
   """
 
 proc modInt(a, b: int): int {.asmNoStackFrame, compilerproc.} =
   asm """
     if (`b` == 0) `raiseDivByZero`();
     if (`b` == -1 && `a` == 2147483647) `raiseOverflow`();
-    return Math.floor(`a` % `b`);
+    return Math.trunc(`a` % `b`);
   """
 
-proc addInt64(a, b: int): int {.asmNoStackFrame, compilerproc.} =
+proc checkOverflowInt64(a: int64) {.asmNoStackFrame, compilerproc.} =
+  asm """
+    if (`a` > 9223372036854775807n || `a` < -9223372036854775808n) `raiseOverflow`();
+  """
+
+proc addInt64(a, b: int64): int64 {.asmNoStackFrame, compilerproc.} =
   asm """
     var result = `a` + `b`;
-    if (result > 9223372036854775807
-    || result < -9223372036854775808) `raiseOverflow`();
+    `checkOverflowInt64`(result);
     return result;
   """
 
-proc subInt64(a, b: int): int {.asmNoStackFrame, compilerproc.} =
+proc subInt64(a, b: int64): int64 {.asmNoStackFrame, compilerproc.} =
   asm """
     var result = `a` - `b`;
-    if (result > 9223372036854775807
-    || result < -9223372036854775808) `raiseOverflow`();
+    `checkOverflowInt64`(result);
     return result;
   """
 
-proc mulInt64(a, b: int): int {.asmNoStackFrame, compilerproc.} =
+proc mulInt64(a, b: int64): int64 {.asmNoStackFrame, compilerproc.} =
   asm """
     var result = `a` * `b`;
-    if (result > 9223372036854775807
-    || result < -9223372036854775808) `raiseOverflow`();
+    `checkOverflowInt64`(result);
     return result;
   """
 
-proc divInt64(a, b: int): int {.asmNoStackFrame, compilerproc.} =
+proc divInt64(a, b: int64): int64 {.asmNoStackFrame, compilerproc.} =
   asm """
-    if (`b` == 0) `raiseDivByZero`();
-    if (`b` == -1 && `a` == 9223372036854775807) `raiseOverflow`();
-    return Math.floor(`a` / `b`);
+    if (`b` == 0n) `raiseDivByZero`();
+    if (`b` == -1n && `a` == 9223372036854775807n) `raiseOverflow`();
+    return `a` / `b`;
   """
 
-proc modInt64(a, b: int): int {.asmNoStackFrame, compilerproc.} =
+proc modInt64(a, b: int64): int64 {.asmNoStackFrame, compilerproc.} =
   asm """
-    if (`b` == 0) `raiseDivByZero`();
-    if (`b` == -1 && `a` == 9223372036854775807) `raiseOverflow`();
-    return Math.floor(`a` % `b`);
+    if (`b` == 0n) `raiseDivByZero`();
+    if (`b` == -1n && `a` == 9223372036854775807n) `raiseOverflow`();
+    return `a` % `b`;
   """
 
 proc negInt(a: int): int {.compilerproc.} =
@@ -417,67 +503,13 @@ proc absInt(a: int): int {.compilerproc.} =
 proc absInt64(a: int64): int64 {.compilerproc.} =
   result = if a < 0: a*(-1) else: a
 
-proc leU(a, b: int): bool {.compilerproc.} =
-  result = abs(a) <= abs(b)
-
-proc ltU(a, b: int): bool {.compilerproc.} =
-  result = abs(a) < abs(b)
-
-proc leU64(a, b: int64): bool {.compilerproc.} =
-  result = abs(a) <= abs(b)
-proc ltU64(a, b: int64): bool {.compilerproc.} =
-  result = abs(a) < abs(b)
-
-proc addU(a, b: int): int {.compilerproc.} =
-  result = abs(a) + abs(b)
-proc addU64(a, b: int64): int64 {.compilerproc.} =
-  result = abs(a) + abs(b)
-
-proc subU(a, b: int): int {.compilerproc.} =
-  result = abs(a) - abs(b)
-proc subU64(a, b: int64): int64 {.compilerproc.} =
-  result = abs(a) - abs(b)
-
-proc mulU(a, b: int): int {.compilerproc.} =
-  result = abs(a) * abs(b)
-proc mulU64(a, b: int64): int64 {.compilerproc.} =
-  result = abs(a) * abs(b)
-
-proc divU(a, b: int): int {.compilerproc.} =
-  result = abs(a) div abs(b)
-proc divU64(a, b: int64): int64 {.compilerproc.} =
-  result = abs(a) div abs(b)
-
-proc modU(a, b: int): int {.compilerproc.} =
-  result = abs(a) mod abs(b)
-proc modU64(a, b: int64): int64 {.compilerproc.} =
-  result = abs(a) mod abs(b)
-
-proc ze*(a: int): int {.compilerproc.} =
-  result = a
-
-proc ze64*(a: int64): int64 {.compilerproc.} =
-  result = a
-
-proc toU8*(a: int): int8 {.asmNoStackFrame, compilerproc.} =
-  asm """
-    return `a`;
-  """
-
-proc toU16*(a: int): int16 {.asmNoStackFrame, compilerproc.} =
-  asm """
-    return `a`;
-  """
-
-proc toU32*(a: int64): int32 {.asmNoStackFrame, compilerproc.} =
-  asm """
-    return `a`;
-  """
-
 proc nimMin(a, b: int): int {.compilerproc.} = return if a <= b: a else: b
 proc nimMax(a, b: int): int {.compilerproc.} = return if a >= b: a else: b
 
-type NimString = string # hack for hti.nim
+proc chckNilDisp(p: pointer) {.compilerproc.} =
+  if p == nil:
+    sysFatal(NilAccessDefect, "cannot dispatch; dispatcher is nil")
+
 include "system/hti"
 
 proc isFatPointer(ti: PNimType): bool =
@@ -496,8 +528,11 @@ proc nimCopyAux(dest, src: JSRef, n: ptr TNimNode) {.compilerproc.} =
       `dest`[`n`.offset] = nimCopy(`dest`[`n`.offset], `src`[`n`.offset], `n`.typ);
     """
   of nkList:
-    for i in 0..n.len-1:
-      nimCopyAux(dest, src, n.sons[i])
+    asm """
+    for (var i = 0; i < `n`.sons.length; i++) {
+      nimCopyAux(`dest`, `src`, `n`.sons[i]);
+    }
+    """
   of nkCase:
     asm """
       `dest`[`n`.offset] = nimCopy(`dest`[`n`.offset], `src`[`n`.offset], `n`.typ);
@@ -531,17 +566,40 @@ proc nimCopy(dest, src: JSRef, ti: PNimType): JSRef =
     else:
       asm "`result` = (`dest` === null || `dest` === undefined) ? {} : `dest`;"
     nimCopyAux(result, src, ti.node)
-  of tySequence, tyArrayConstr, tyOpenArray, tyArray:
+  of tyArrayConstr, tyArray:
+    # In order to prevent a type change (TypedArray -> Array) and to have better copying performance,
+    # arrays constructors are considered separately
+    asm """
+      if(ArrayBuffer.isView(`src`)) { 
+        if(`dest` === null || `dest` === undefined || `dest`.length != `src`.length) {
+          `dest` = new `src`.constructor(`src`);
+        } else {
+          `dest`.set(`src`, 0);
+        }
+        `result` = `dest`;
+      } else {
+        if (`src` === null) {
+          `result` = null;
+        }
+        else {
+          if (`dest` === null || `dest` === undefined || `dest`.length != `src`.length) {
+            `dest` = new Array(`src`.length);
+          }
+          `result` = `dest`;
+          for (var i = 0; i < `src`.length; ++i) {
+            `result`[i] = nimCopy(`result`[i], `src`[i], `ti`.base);
+          }
+        }
+      }
+    """
+  of tySequence, tyOpenArray:
     asm """
       if (`src` === null) {
         `result` = null;
       }
       else {
-        if (`dest` === null || `dest` === undefined) {
+        if (`dest` === null || `dest` === undefined || `dest`.length != `src`.length) {
           `dest` = new Array(`src`.length);
-        }
-        else {
-          `dest`.length = `src`.length;
         }
         `result` = `dest`;
         for (var i = 0; i < `src`.length; ++i) {
@@ -575,7 +633,7 @@ proc genericReset(x: JSRef, ti: PNimType): JSRef {.compilerproc.} =
       asm "`result` = {m_type: `ti`};"
     else:
       asm "`result` = {};"
-  of tySequence, tyOpenArray:
+  of tySequence, tyOpenArray, tyString:
     asm """
       `result` = [];
     """
@@ -590,7 +648,7 @@ proc genericReset(x: JSRef, ti: PNimType): JSRef {.compilerproc.} =
     discard
 
 proc arrayConstr(len: int, value: JSRef, typ: PNimType): JSRef {.
-                 asmNoStackFrame, compilerproc.} =
+                asmNoStackFrame, compilerproc.} =
   # types are fake
   asm """
     var result = new Array(`len`);
@@ -600,7 +658,7 @@ proc arrayConstr(len: int, value: JSRef, typ: PNimType): JSRef {.
 
 proc chckIndx(i, a, b: int): int {.compilerproc.} =
   if i >= a and i <= b: return i
-  else: raiseIndexError()
+  else: raiseIndexError(i, a, b)
 
 proc chckRange(i, a, b: int): int {.compilerproc.} =
   if i >= a and i <= b: return i
@@ -612,7 +670,7 @@ proc chckObj(obj, subclass: PNimType) {.compilerproc.} =
   if x == subclass: return # optimized fast path
   while x != subclass:
     if x == nil:
-      raise newException(ObjectConversionError, "invalid object conversion")
+      raise newException(ObjectConversionDefect, "invalid object conversion")
     x = x.base
 
 proc isObj(obj, subclass: PNimType): bool {.compilerproc.} =
@@ -625,13 +683,12 @@ proc isObj(obj, subclass: PNimType): bool {.compilerproc.} =
   return true
 
 proc addChar(x: string, c: char) {.compilerproc, asmNoStackFrame.} =
-  asm """
-    `x`[`x`.length-1] = `c`; `x`.push(0);
-  """
+  asm "`x`.push(`c`);"
 
 {.pop.}
 
 proc tenToThePowerOf(b: int): BiggestFloat =
+  # xxx deadcode
   var b = b
   var a = 10.0
   result = 1.0
@@ -645,72 +702,80 @@ proc tenToThePowerOf(b: int): BiggestFloat =
 const
   IdentChars = {'a'..'z', 'A'..'Z', '0'..'9', '_'}
 
-# XXX use JS's native way here
-proc nimParseBiggestFloat(s: string, number: var BiggestFloat, start = 0): int {.
-                          compilerProc.} =
-  var
-    esign = 1.0
-    sign = 1.0
-    i = start
-    exponent: int
-    flags: int
-  number = 0.0
+
+proc parseFloatNative(a: openarray[char]): float =
+  var str = ""
+  for x in a:
+    str.add x
+
+  let cstr = cstring str
+
+  asm """
+  `result` = Number(`cstr`);
+  """
+
+proc nimParseBiggestFloat(s: openarray[char], number: var BiggestFloat): int {.compilerproc.} =
+  var sign: bool
+  var i = 0
   if s[i] == '+': inc(i)
   elif s[i] == '-':
-    sign = -1.0
+    sign = true
     inc(i)
   if s[i] == 'N' or s[i] == 'n':
     if s[i+1] == 'A' or s[i+1] == 'a':
       if s[i+2] == 'N' or s[i+2] == 'n':
         if s[i+3] notin IdentChars:
           number = NaN
-          return i+3 - start
+          return i+3
     return 0
   if s[i] == 'I' or s[i] == 'i':
     if s[i+1] == 'N' or s[i+1] == 'n':
       if s[i+2] == 'F' or s[i+2] == 'f':
         if s[i+3] notin IdentChars:
-          number = Inf*sign
-          return i+3 - start
+          number = if sign: -Inf else: Inf
+          return i+3
     return 0
-  while s[i] in {'0'..'9'}:
-    # Read integer part
-    flags = flags or 1
-    number = number * 10.0 + toFloat(ord(s[i]) - ord('0'))
+
+  var buf: string
+    # we could also use an `array[char, N]` buffer to avoid reallocs, or
+    # use a 2-pass algorithm that first computes the length.
+  if sign: buf.add '-'
+  template addInc =
+    buf.add s[i]
     inc(i)
+  template eatUnderscores =
     while s[i] == '_': inc(i)
-  # Decimal?
-  if s[i] == '.':
-    var hd = 1.0
+  while s[i] in {'0'..'9'}: # Read integer part
+    buf.add s[i]
     inc(i)
-    while s[i] in {'0'..'9'}:
-      # Read fractional part
-      flags = flags or 2
-      number = number * 10.0 + toFloat(ord(s[i]) - ord('0'))
-      hd = hd * 10.0
-      inc(i)
-      while s[i] == '_': inc(i)
-    number = number / hd # this complicated way preserves precision
+    eatUnderscores()
+  if s[i] == '.': # Decimal?
+    addInc()
+    while s[i] in {'0'..'9'}: # Read fractional part
+      addInc()
+      eatUnderscores()
   # Again, read integer and fractional part
-  if flags == 0: return 0
-  # Exponent?
-  if s[i] in {'e', 'E'}:
-    inc(i)
-    if s[i] == '+':
-      inc(i)
-    elif s[i] == '-':
-      esign = -1.0
-      inc(i)
-    if s[i] notin {'0'..'9'}:
-      return 0
+  if buf.len == ord(sign): return 0
+  if s[i] in {'e', 'E'}: # Exponent?
+    addInc()
+    if s[i] == '+': inc(i)
+    elif s[i] == '-': addInc()
+    if s[i] notin {'0'..'9'}: return 0
     while s[i] in {'0'..'9'}:
-      exponent = exponent * 10 + ord(s[i]) - ord('0')
-      inc(i)
-      while s[i] == '_': inc(i)
-  # Calculate Exponent
-  let hd = tenToThePowerOf(exponent)
-  if esign > 0.0: number = number * hd
-  else:           number = number / hd
-  # evaluate sign
-  number = number * sign
-  result = i - start
+      addInc()
+      eatUnderscores()
+  number = parseFloatNative(buf)
+  result = i
+
+# Workaround for IE, IE up to version 11 lacks 'Math.trunc'. We produce
+# 'Math.trunc' for Nim's ``div`` and ``mod`` operators:
+when defined(nimJsMathTruncPolyfill):
+  {.emit: """
+if (!Math.trunc) {
+  Math.trunc = function(v) {
+    v = +v;
+    if (!isFinite(v)) return v;
+    return (v - v % 1) || (v < 0 ? -0 : v === 0 ? v : 0);
+  };
+}
+""".}

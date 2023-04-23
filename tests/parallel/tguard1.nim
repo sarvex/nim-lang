@@ -1,7 +1,11 @@
+discard """
+output: "90"
+"""
+
 
 when false:
-  template lock(a, b: ptr TLock; body: stmt) =
-    if cast[ByteAddress](a) < cast[ByteAddress](b):
+  template lock(a, b: ptr Lock; body: stmt) =
+    if cast[int](a) < cast[int](b):
       pthread_mutex_lock(a)
       pthread_mutex_lock(b)
     else:
@@ -24,7 +28,7 @@ var
 
 c.i = 89
 
-template atomicRead(L, x): expr =
+template atomicRead(L, x): untyped =
   {.locks: [L].}:
     x
 

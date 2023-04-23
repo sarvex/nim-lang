@@ -11,12 +11,13 @@
 
 import streams, parsexml, strtabs, xmltree
 
-type
-  XmlError* = object of ValueError ## exception that is raised
-                                   ## for invalid XML
-    errors*: seq[string]           ## all detected parsing errors
+when defined(nimPreviewSlimSystem):
+  import std/syncio
 
-{.deprecated: [EInvalidXml: XmlError].}
+type
+  XmlError* = object of ValueError ## Exception that is raised
+                                   ## for invalid XML.
+    errors*: seq[string]           ## All detected parsing errors.
 
 proc raiseInvalidXml(errors: seq[string]) =
   var e: ref XmlError
@@ -28,7 +29,7 @@ proc raiseInvalidXml(errors: seq[string]) =
 proc addNode(father, son: XmlNode) =
   if son != nil: add(father, son)
 
-proc parse(x: var XmlParser, errors: var seq[string]): XmlNode
+proc parse(x: var XmlParser, errors: var seq[string]): XmlNode {.gcsafe.}
 
 proc untilElementEnd(x: var XmlParser, result: XmlNode,
                      errors: var seq[string]) =
@@ -61,7 +62,7 @@ proc parse(x: var XmlParser, errors: var seq[string]): XmlNode =
   of xmlError:
     errors.add(errorMsg(x))
     next(x)
-  of xmlElementStart:    ## ``<elem>``
+  of xmlElementStart: ## ``<elem>``
     result = newElement(x.elementName)
     next(x)
     untilElementEnd(x, result, errors)
@@ -101,11 +102,11 @@ proc parse(x: var XmlParser, errors: var seq[string]): XmlNode =
   of xmlEof: discard
 
 proc parseXml*(s: Stream, filename: string,
-               errors: var seq[string]): XmlNode =
-  ## parses the XML from stream `s` and returns a ``PXmlNode``. Every
-  ## occurred parsing error is added to the `errors` sequence.
+               errors: var seq[string], options: set[XmlParseOption] = {reportComments}): XmlNode =
+  ## Parses the XML from stream ``s`` and returns a ``XmlNode``. Every
+  ## occurred parsing error is added to the ``errors`` sequence.
   var x: XmlParser
-  open(x, s, filename, {reportComments})
+  open(x, s, filename, options)
   while true:
     x.next()
     case x.kind
@@ -120,27 +121,32 @@ proc parseXml*(s: Stream, filename: string,
       break
   close(x)
 
-proc parseXml*(s: Stream): XmlNode =
-  ## parses the XTML from stream `s` and returns a ``PXmlNode``. All parsing
-  ## errors are turned into an ``EInvalidXML`` exception.
+proc parseXml*(s: Stream, options: set[XmlParseOption] = {reportComments}): XmlNode =
+  ## Parses the XML from stream ``s`` and returns a ``XmlNode``. All parsing
+  ## errors are turned into an ``XmlError`` exception.
   var errors: seq[string] = @[]
-  result = parseXml(s, "unknown_html_doc", errors)
+  result = parseXml(s, "unknown_xml_doc", errors, options)
   if errors.len > 0: raiseInvalidXml(errors)
 
-proc loadXml*(path: string, errors: var seq[string]): XmlNode =
+proc parseXml*(str: string, options: set[XmlParseOption] = {reportComments}): XmlNode =
+  ## Parses the XML from string ``str`` and returns a ``XmlNode``. All parsing
+  ## errors are turned into an ``XmlError`` exception.
+  parseXml(newStringStream(str), options)
+
+proc loadXml*(path: string, errors: var seq[string], options: set[XmlParseOption] = {reportComments}): XmlNode =
   ## Loads and parses XML from file specified by ``path``, and returns
-  ## a ``PXmlNode``. Every occurred parsing error is added to the `errors`
+  ## a ``XmlNode``. Every occurred parsing error is added to the ``errors``
   ## sequence.
   var s = newFileStream(path, fmRead)
   if s == nil: raise newException(IOError, "Unable to read file: " & path)
-  result = parseXml(s, path, errors)
+  result = parseXml(s, path, errors, options)
 
-proc loadXml*(path: string): XmlNode =
+proc loadXml*(path: string, options: set[XmlParseOption] = {reportComments}): XmlNode =
   ## Loads and parses XML from file specified by ``path``, and returns
-  ## a ``PXmlNode``.  All parsing errors are turned into an ``EInvalidXML``
+  ## a ``XmlNode``. All parsing errors are turned into an ``XmlError``
   ## exception.
   var errors: seq[string] = @[]
-  result = loadXml(path, errors)
+  result = loadXml(path, errors, options)
   if errors.len > 0: raiseInvalidXml(errors)
 
 when isMainModule:
@@ -164,3 +170,7 @@ when isMainModule:
       var xml = loadXml(filePath, errors)
       assert(errors.len == 0, "The file tests/testdata/doc1.xml should be parsed without errors.")
 
+    block bug1518:
+      var err: seq[string] = @[]
+      assert $parsexml(newStringStream"<tag>One &amp; two</tag>", "temp.xml",
+          err) == "<tag>One &amp; two</tag>"

@@ -12,7 +12,7 @@ proc testBlock(): string {.compileTime.} =
     echo "outer block"
   result = "ta-da"
 
-macro mac(n: expr): expr =
+macro mac(n: typed): string =
   let n = callsite()
   expectKind(n, nnkCall)
   expectLen(n, 2)
@@ -26,3 +26,11 @@ const t = mac("HEllo World")
 echo s, " ", t
 
 
+#-----------------------------------------------------------------------------
+# issue #15326
+macro m(n:typed):auto =
+  result = n
+
+proc f[T](x:T): T {.m.} = x
+
+discard f(3)

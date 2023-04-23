@@ -1,5 +1,10 @@
 discard """
+  matrix: "--mm:refc"
   ccodecheck: "!@('{' \\s* 'NI HEX3Astate;' \\s* '}')"
+  output: '''
+a1 10
+a1 9
+'''
 """
 
 # bug #1803
@@ -26,6 +31,6 @@ var
   z: TaskFn
 
 discard x()
-z = x #shallowCopy(z, x)
-z = y #shallowCopy(z, y)
+shallowCopy(z, x)
+shallowCopy(z, y)
 discard x()

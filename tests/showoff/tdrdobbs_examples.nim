@@ -40,14 +40,14 @@ const msb3999 = mostSignificantBit(3999)
 
 echo msb3999, " ", mostSignificantBit(0), " ", square(44)
 
-proc filter[T](a: openarray[T], predicate: proc (x: T): bool): seq[T] =
+proc filter[T](a: openArray[T], predicate: proc (x: T): bool): seq[T] =
   result = @[] # @[] constructs the empty seq
   for x in a:
     if predicate(x): result.add(x)
 
-proc map[T, S](a: openarray[T], fn: proc (x: T): S): seq[S] =
+proc map[T, S](a: openArray[T], fn: proc (x: T): S): seq[S] =
   newSeq(result, a.len)
-  for i in 0 .. <a.len: result[i] = fn(a[i])
+  for i in 0 ..< a.len: result[i] = fn(a[i])
 
 
 type
@@ -105,10 +105,10 @@ proc pat2kind(pattern: string): FormulaKind =
 import macros
 
 proc matchAgainst(n, pattern: NimNode): NimNode {.compileTime.} =
-  template `@`(current, field: expr): expr =
+  template `@`(current, field: untyped): untyped =
     newDotExpr(current, newIdentNode(astToStr(field)))
 
-  template `==@`(n, pattern: expr): expr =
+  template `==@`(n, pattern: untyped): untyped =
     newCall("==", n@kind, newIdentNode($pat2kind($pattern.ident)))
 
   case pattern.kind
@@ -126,7 +126,7 @@ proc matchAgainst(n, pattern: NimNode): NimNode {.compileTime.} =
   else:
     error "invalid pattern"
 
-macro `=~` (n: Formula, pattern: expr): bool =
+macro `=~` (n: Formula, pattern: untyped): bool =
   result = matchAgainst(n, pattern)
 
 proc isPolyTerm2(n: Formula): bool = n =~ c * x^c

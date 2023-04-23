@@ -7,6 +7,10 @@ contents thereof.
 
 As said in the Olde Country, `Keepe it Gangster'."""
 
+#[
+xxx remove this? seems mostly duplicate of: tests/manyloc/nake/nake.nim
+]#
+
 import strutils, parseopt, tables, os
 
 type
@@ -50,8 +54,8 @@ template withDir*(dir: string; body: stmt): stmt =
   body
   cd(curDir)
 
-when isMainModule:
-  if not existsFile("nakefile.nim"):
+when true:
+  if not fileExists("nakefile.nim"):
     echo "No nakefile.nim found. Current working dir is ", getCurrentDir()
     quit 1
   var args = ""
@@ -60,7 +64,8 @@ when isMainModule:
     args.add " "
   quit(shell("nim", "c", "-r", "nakefile.nim", args))
 else:
-  addQuitProc(proc() {.noconv.} =
+  import std/exitprocs
+  addExitProc(proc() {.noconv.} =
     var
       task: string
       printTaskList: bool

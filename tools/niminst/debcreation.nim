@@ -9,6 +9,10 @@
 
 import osproc, times, os, strutils
 
+
+when defined(nimPreviewSlimSystem):
+  import std/[assertions, syncio]
+
 # http://www.debian.org/doc/manuals/maint-guide/
 
 # Required files for debhelper.
@@ -84,7 +88,7 @@ proc createCopyright(pkgName, mtnName, mtnEmail, version: string,
     addN("Files: " & f)
     addN("License: " & license)
 
-proc formatDateTime(t: TimeInfo, timezone: string): string =
+proc formatDateTime(t: DateTime, timezone: string): string =
   var day = ($t.weekday)[0..2] & ", "
 
   return "$1$2 $3 $4 $5:$6:$7 $8" % [day, intToStr(t.monthday, 2),
@@ -101,7 +105,7 @@ proc createChangelog(pkgName, version, maintainer: string): string =
   addN("  * Initial release.")
   addN("")
   addN(" -- " & maintainer & "  " &
-       formatDateTime(getGMTime(getTime()), "+0000"))
+       formatDateTime(utc(getTime()), "+0000"))
 
 proc createRules(): string =
   ## Creates a nim application-agnostic rules file for building deb packages.
@@ -148,7 +152,7 @@ proc prepDeb*(packName, version, mtnName, mtnEmail, shortDesc, desc: string,
   ## binaries/config/docs/lib: files relative to nim's root, that need to
   ##   be installed.
 
-  let pkgName = packName.toLower()
+  let pkgName = packName.toLowerAscii()
 
   var workingDir = getTempDir() / "niminst" / "deb"
   var upstreamSource = (pkgName & "-" & version)
@@ -168,7 +172,7 @@ proc prepDeb*(packName, version, mtnName, mtnEmail, shortDesc, desc: string,
   echo("Creating necessary files in debian/")
   createDir(workingDir / upstreamSource / "debian")
 
-  template writeDebian(f, s: string): expr =
+  template writeDebian(f, s: string) =
     writeFile(workingDir / upstreamSource / "debian" / f, s)
 
   var controlFile = createControl(pkgName, makeMtn(mtnName, mtnEmail),

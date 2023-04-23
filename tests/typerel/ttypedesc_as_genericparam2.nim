@@ -1,6 +1,7 @@
 discard """
-  line: 9
+  matrix: "--mm:refc"
   errormsg: "'repr' doesn't support 'void' type"
+  line: 10
 """
 
 # bug #2879

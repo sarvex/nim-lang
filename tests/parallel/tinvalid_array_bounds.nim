@@ -1,5 +1,6 @@
 discard """
-  errormsg: "can prove: i + 1 > 30"
+  matrix: "--mm:refc"
+  errormsg: "cannot prove (i)..(i) disjoint from (i + 1)..(i + 1)"
   line: 21
 """
 

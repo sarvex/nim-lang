@@ -6,7 +6,7 @@ discard """
 # bug #2257
 import threadpool
 
-type StringChannel = TChannel[string]
+type StringChannel = Channel[string]
 var channels: array[1..3, StringChannel]
 
 type
@@ -28,5 +28,5 @@ proc main =
   sync()
   for ix in 1..3: channels[ix].close()
 
-when isMainModule:
+when true:
   main()

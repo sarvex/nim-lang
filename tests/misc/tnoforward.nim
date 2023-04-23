@@ -1,8 +1,9 @@
 discard """
-  disabled: true
+  output: "10"
 """
 
-{. noforward: on .}
+# {. noforward: on .}
+{.experimental: "codeReordering".}
 
 proc foo(x: int) =
   bar x

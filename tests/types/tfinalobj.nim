@@ -1,9 +1,9 @@
 discard """
-  output: "abc"
+  output: '''abc'''
 """
 
 type
-  TA = object {.pure, final.}
+  TA {.pure, final.} = object
     x: string
 
 var
@@ -13,4 +13,3 @@ a.x = "abc"
 doAssert TA.sizeof == string.sizeof
 
 echo a.x
-

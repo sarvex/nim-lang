@@ -1,5 +1,6 @@
 discard """
-  output: '''true'''
+  output: '''true
+5.0'''
 """
 
 #bug #592
@@ -28,9 +29,9 @@ proc newElement[TKey, TData](key: TKey, left: PElement[TKey, TData] = nil, right
 proc newElement[Tkey, TData](key: Tkey, data: TData) : PElement[Tkey, TData] =
   PElement[TKey, TData](kind: ElementKind.leaf, data: data)
 
-proc find*[TKey, TData](root: PElement[TKey, TData], key: TKey): TData {.raises: [EInvalidKey].} =
+proc find*[TKey, TData](root: PElement[TKey, TData], key: TKey): TData {.raises: [KeyError].} =
   if root.left == nil:
-    raise newException(EInvalidKey, "key does not exist: " & key)
+    raise newException(KeyError, "key does not exist: " & key)
 
   var tmp_element = addr(root)
 
@@ -43,7 +44,7 @@ proc find*[TKey, TData](root: PElement[TKey, TData], key: TKey): TData {.raises:
   if tmp_element.key == key:
     return tmp_element.left.data
   else:
-    raise newException(EInvalidKey, "key does not exist: " & key)
+    raise newException(KeyError, "key does not exist: " & key)
 
 proc add*[TKey, TData](root: var PElement[TKey, TData], key: TKey, data: TData) : bool =
   if root.left == nil:
@@ -75,3 +76,26 @@ proc add*[TKey, TData](root: var PElement[TKey, TData], key: TKey, data: TData) 
 var tree = PElement[int, int](kind: ElementKind.inner, key: 0, left: nil, right: nil)
 let result = add(tree, 1, 1)
 echo(result)
+
+# bug #3748
+type
+  Foo = object
+    bar: int
+
+proc bar(cur: Foo, val: int, s:seq[string]) =
+  discard cur.bar
+
+proc does_fail(): Foo =
+  let a = @["a"]
+  result.bar(5, a)
+
+doAssert does_fail().bar == 0
+
+# bug #20645
+
+type Zzz[Gen] = object
+
+proc testZ(z: Zzz) =
+  echo z.Gen(5)
+
+testZ(Zzz[float]())

@@ -1,9 +1,10 @@
 discard """
-  file: "tasyncexceptions.nim"
-  exitcode: 1
   outputsub: "Error: unhandled exception: foobar"
+  exitcode: 1
 """
 import asyncdispatch
+
+# Note: This is a test case for a bug.
 
 proc accept(): Future[int] {.async.} =
   await sleepAsync(100)
@@ -18,7 +19,7 @@ proc processClient(fd: int) {.async.} =
   var line = await recvLine(fd)
   var foo = line[0]
   if foo == 'g':
-    raise newException(EBase, "foobar")
+    raise newException(Exception, "foobar")
 
 proc serve() {.async.} =
 
@@ -26,7 +27,7 @@ proc serve() {.async.} =
     var fut = await accept()
     await processClient(fut)
 
-when isMainModule:
+when true:
   proc main =
     var fut = serve()
     fut.callback =

@@ -10,38 +10,24 @@
 ## implements some little helper passes
 
 import
-  strutils, ast, astalgo, passes, msgs, options, idgen
+  ast, passes, msgs, options, lineinfos
 
-proc verboseOpen(s: PSym): PPassContext =
-  #MessageOut('compiling ' + s.name.s);
-  result = nil                # we don't need a context
-  rawMessage(hintProcessing, s.name.s)
+from modulegraphs import ModuleGraph, PPassContext
+
+type
+  VerboseRef = ref object of PPassContext
+    config: ConfigRef
+
+proc verboseOpen(graph: ModuleGraph; s: PSym; idgen: IdGenerator): PPassContext =
+  # xxx consider either removing this or keeping for documentation for how to add a pass
+  result = VerboseRef(config: graph.config, idgen: idgen)
+
+import std/objectdollar
 
 proc verboseProcess(context: PPassContext, n: PNode): PNode =
+  # called from `process` in `processTopLevelStmt`.
   result = n
-  if context != nil: internalError("logpass: context is not nil")
-  if gVerbosity == 3:
-    # system.nim deactivates all hints, for verbosity:3 we want the processing
-    # messages nonetheless, so we activate them again unconditionally:
-    incl(msgs.gNotes, hintProcessing)
-    message(n.info, hintProcessing, $idgen.gBackendId)
+  let v = VerboseRef(context)
+  message(v.config, n.info, hintProcessingStmt, $v.idgen[])
 
 const verbosePass* = makePass(open = verboseOpen, process = verboseProcess)
-
-proc cleanUp(c: PPassContext, n: PNode): PNode =
-  result = n
-  # we cannot clean up if dead code elimination is activated
-  if optDeadCodeElim in gGlobalOptions or n == nil: return
-  case n.kind
-  of nkStmtList:
-    for i in countup(0, sonsLen(n) - 1): discard cleanUp(c, n.sons[i])
-  of nkProcDef, nkMethodDef:
-    if n.sons[namePos].kind == nkSym:
-      var s = n.sons[namePos].sym
-      if sfDeadCodeElim notin getModule(s).flags and not astNeeded(s):
-        s.ast.sons[bodyPos] = ast.emptyNode # free the memory
-  else:
-    discard
-
-const cleanupPass* = makePass(process = cleanUp, close = cleanUp)
-

@@ -1,6 +1,6 @@
 discard """
-  file: "tlenopenarray.nim"
-  output: '''1
+output: '''
+1
 0
 Whopie
 12
@@ -18,15 +18,15 @@ echo v[2]
 
 # bug #569
 
-import queues
+import deques
 
 type
   TWidget = object
-    names: Queue[string]
+    names: Deque[string]
 
-var w = TWidget(names: initQueue[string]())
+var w = TWidget(names: initDeque[string]())
 
-add(w.names, "Whopie")
+addLast(w.names, "Whopie")
 
 for n in w.names: echo(n)
 
@@ -46,3 +46,13 @@ echo value
 var ys = @[4.1, 5.6, 7.2, 1.7, 9.3, 4.4, 3.2]
 #var x = int(ys.high / 2) #echo ys[x] # Works
 echo ys[int(ys.high / 2)] # Doesn't work
+
+
+# bug #19680
+var here = ""
+when stderr is static:
+  doAssert false
+else:
+  here = "works"
+
+doAssert here == "works"

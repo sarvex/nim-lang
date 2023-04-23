@@ -1,21 +1,25 @@
 discard """
-  outputsub: "All rights reserved."
+  disabled: i386
+  outputsub: "Just a simple text for test"
 """
 
 type
   TMsgKind = enum
     mLine, mEof
-  TMsg = object {.pure, final.}
+  TMsg = object
     case k: TMsgKind
-    of mEof: nil
+    of mEof: discard
     of mLine: data: string
 
 var
-  producer, consumer: TThread[void]
-  chan: TChannel[TMsg]
+  producer, consumer: Thread[void]
+  chan: Channel[TMsg]
   printedLines = 0
+  prodId: int
+  consId: int
 
 proc consume() {.thread.} =
+  consId = getThreadId()
   while true:
     var x = recv(chan)
     if x.k == mEof: break
@@ -23,14 +27,15 @@ proc consume() {.thread.} =
     atomicInc(printedLines)
 
 proc produce() {.thread.} =
+  prodId = getThreadId()
   var m: TMsg
-  var input = open("readme.txt")
+  var input = open("tests/dummy.txt")
   var line = ""
   while input.readLine(line):
     m.data = line
     chan.send(m)
   close(input)
-  m.k = mEof
+  m = TMsg(k: mEof)
   chan.send(m)
 
 open(chan)
@@ -40,5 +45,6 @@ joinThread(consumer)
 joinThread(producer)
 
 close(chan)
+doAssert prodId != consId
 echo printedLines
 

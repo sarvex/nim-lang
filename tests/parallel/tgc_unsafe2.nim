@@ -1,15 +1,14 @@
 discard """
-  line: 28
-  nimout: '''tgc_unsafe2.nim(22, 5) Warning: 'trick' is not GC-safe as it accesses 'global' which is a global using GC'ed memory
-tgc_unsafe2.nim(26, 5) Warning: 'track' is not GC-safe as it calls 'trick'
-tgc_unsafe2.nim(28, 5) Error: 'consumer' is not GC-safe as it calls 'track'
-'''
   errormsg: "'consumer' is not GC-safe as it calls 'track'"
+  nimout: '''tgc_unsafe2.nim(21, 6) Warning: 'trick' is not GC-safe as it accesses 'global' which is a global using GC'ed memory [GcUnsafe2]
+tgc_unsafe2.nim(25, 6) Warning: 'track' is not GC-safe as it calls 'trick' [GcUnsafe2]
+tgc_unsafe2.nim(27, 6) Error: 'consumer' is not GC-safe as it calls 'track'
+'''
 """
 
 import threadpool
 
-type StringChannel = TChannel[string]
+type StringChannel = Channel[string]
 var channels: array[1..3, StringChannel]
 
 type
@@ -35,5 +34,5 @@ proc main =
   sync()
   for ix in 1..3: channels[ix].close()
 
-when isMainModule:
+when true:
   main()

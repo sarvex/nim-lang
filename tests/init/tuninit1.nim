@@ -1,10 +1,10 @@
 discard """
-  msg: "Warning: 'y' might not have been initialized [Uninit]"
-  line:34
+  nimout: "tuninit1.nim(34, 11) Warning: use explicit initialization of 'y' for clarity [Uninit]"
+  action: compile
 """
 
 import strutils
-
+{.experimental: "strictDefs".}
 {.warning[Uninit]:on.}
 
 proc p =
@@ -22,7 +22,7 @@ proc p =
 
     try:
       z = parseInt("1233")
-    except E_Base:
+    except Exception:
       case x
       of 34: z = 123
       of 13: z = 34

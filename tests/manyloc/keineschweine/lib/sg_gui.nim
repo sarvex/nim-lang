@@ -2,16 +2,16 @@ import
   sfml, sfml_colors,
   input_helpers, sg_packets
 from strutils import countlines
-{.deadCodeElim: on.}
+
 type
   PGuiContainer* = ref TGuiContainer
-  TGuiContainer* = object of TObject
+  TGuiContainer* = object of RootObj
     position: TVector2f
     activeEntry: PTextEntry
     widgets: seq[PGuiObject]
     buttons: seq[PButton]
   PGuiObject* = ref TGuiObject
-  TGuiObject* = object of TObject
+  TGuiObject* = object of RootObj
   PButton* = ref TButton
   TButton* = object of TGuiObject
     enabled: bool
@@ -92,8 +92,8 @@ proc newGuiContainer*(pos: TVector2f): PGuiContainer =
   result = newGuiContainer()
   result.setPosition pos
 proc free*(container: PGuiContainer) =
-  container.widgets = nil
-  container.buttons = nil
+  container.widgets = @[]
+  container.buttons = @[]
 proc add*(container: PGuiContainer; widget: PGuiObject) =
   container.widgets.add(widget)
 proc add*(container: PGuiContainer; button: PButton) =
@@ -193,28 +193,28 @@ proc setActive*(t: PTextEntry) =
   if not t.isNil and not t.inputClient.isNil:
     input_helpers.setActive(t.inputClient)
 
+when false:
+  proc newMessageArea*(container: PGuiContainer; position: TVector2f): PMessageArea =
+    new(result)
+    result.messages = @[]
+    result.pos = position
+    container.add(result)
+  proc add*(m: PMessageArea, text: string): PText =
+    result = messageProto.copy()
+    result.setString(text)
+    m.messages.add(result)
+    let nmsgs = len(m.messages)
+    var pos   = vec2f(m.pos.x, m.pos.y)
+    for i in countdown(nmsgs - 1, max(nmsgs - 30, 0)):
+      setPosition(m.messages[i], pos)
+      pos.y -= 16.0
 
-discard """proc newMessageArea*(container: PGuiContainer; position: TVector2f): PMessageArea =
-  new(result)
-  result.messages = @[]
-  result.pos = position
-  container.add(result)
-proc add*(m: PMessageArea, text: string): PText =
-  result = messageProto.copy()
-  result.setString(text)
-  m.messages.add(result)
-  let nmsgs = len(m.messages)
-  var pos   = vec2f(m.pos.x, m.pos.y)
-  for i in countdown(nmsgs - 1, max(nmsgs - 30, 0)):
-    setPosition(m.messages[i], pos)
-    pos.y -= 16.0
+  proc draw*(window: PRenderWindow; m: PMessageArea) =
+    let nmsgs = len(m.messages)
+    if nmsgs == 0: return
+    for i in countdown(nmsgs - 1, max(nmsgs - 30, 0)):
+      window.draw(m.messages[i])
 
-proc draw*(window: PRenderWindow; m: PMessageArea) =
-  let nmsgs = len(m.messages)
-  if nmsgs == 0: return
-  for i in countdown(nmsgs - 1, max(nmsgs - 30, 0)):
-    window.draw(m.messages[i])
-"""
 proc newMessageArea*(container: PGuiContainer; position: TVector2f): PMessageArea =
   new(result)
   result.messages = @[]
@@ -240,7 +240,7 @@ proc add*(m: PMessageArea, msg: ScChat) =
   of CPriv, CSystem: mmm.color = Green
   of CError: mmm.color = Red
 
-  mmm.lines = countLines(mmm.text)+1
+  mmm.lines = countLines(mmm.text)
 
   m.messages.add mmm
   update m
@@ -260,7 +260,7 @@ proc update*(m: PMessageArea) =
       m.texts.add messageProto.copy()
   elif m.texts.len > m.sizeVisible:
     echo "cutting ", m.texts.len - m.sizeVisible, " fields"
-    for i in m.sizeVisible.. < m.texts.len:
+    for i in m.sizeVisible ..< m.texts.len:
       m.texts.pop().destroy()
   let nmsgs = m.messages.len()
   if m.sizeVisible == 0 or nmsgs == 0:

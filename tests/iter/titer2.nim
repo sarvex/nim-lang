@@ -2,7 +2,12 @@ discard """
   output: '''true
 3
 4
-5'''
+5
+0
+1
+2
+3
+4'''
   cmd: "nim $target --gc:none --hints:on --warnings:off $options $file"
 """
 
@@ -12,7 +17,7 @@ type
   TSlotEnum = enum seEmpty, seFilled, seDeleted
   TKeyValuePair[A, B] = tuple[slot: TSlotEnum, key: A, val: B]
   TKeyValuePairSeq[A, B] = seq[TKeyValuePair[A, B]]
-  TTable* {.final.}[A, B] = object
+  TTable*[A, B] {.final.} = object
     data: TKeyValuePairSeq[A, B]
     counter: int
 
@@ -55,3 +60,7 @@ echo "true"
 # bug #1560
 for i in @[3, 4, 5]:
   echo($i)
+
+# bug #6992
+for i in 0 ..< 5u32:
+  echo i

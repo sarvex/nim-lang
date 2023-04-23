@@ -1,8 +1,36 @@
+discard """
+output: '''
+start tradix.nim
+false
+false
+false
+false
+false
+false
+false
+false
+false
+false
+128
+1
+2
+3
+4
+255
+17
+45
+19000
+4294967288
+'''
+"""
+
 # implements and tests an efficient radix tree
 
 ## another method to store an efficient array of pointers:
 ## We use a radix tree with node compression.
 ## There are two node kinds:
+
+echo "start tradix.nim"
 
 const BitsPerUnit = 8*sizeof(int)
 
@@ -12,17 +40,17 @@ type
   TRadixNode {.pure, inheritable.} = object
     kind: TRadixNodeKind
   TRadixNodeLinear = object of TRadixNode
-    len: int8
-    keys: array [0..31, int8]
-    vals: array [0..31, PRadixNode]
+    len: uint8
+    keys: array[0..31, uint8]
+    vals: array[0..31, PRadixNode]
 
   TRadixNodeFull = object of TRadixNode
-    b: array [0..255, PRadixNode]
+    b: array[0..255, PRadixNode]
   TRadixNodeLeafBits = object of TRadixNode
-    b: array [0..7, int]
+    b: array[0..7, int]
   TRadixNodeLeafLinear = object of TRadixNode
-    len: int8
-    keys: array [0..31, int8]
+    len: uint8
+    keys: array[0..31, uint8]
 
 var
   root: PRadixNode
@@ -31,8 +59,8 @@ proc searchInner(r: PRadixNode, a: int): PRadixNode =
   case r.kind
   of rnLinear:
     var x = cast[ptr TRadixNodeLinear](r)
-    for i in 0..ze(x.len)-1:
-      if ze(x.keys[i]) == a: return x.vals[i]
+    for i in 0..int(x.len)-1:
+      if int(x.keys[i]) == a: return x.vals[i]
   of rnFull:
     var x = cast[ptr TRadixNodeFull](r)
     return x.b[a]
@@ -59,8 +87,8 @@ proc searchLeaf(r: PRadixNode, a: int): bool =
     return testBit(x.b[a /% BitsPerUnit], a)
   of rnLeafLinear:
     var x = cast[ptr TRadixNodeLeafLinear](r)
-    for i in 0..ze(x.len)-1:
-      if ze(x.keys[i]) == a: return true
+    for i in 0..int(x.len)-1:
+      if int(x.keys[i]) == a: return true
   else: assert(false)
 
 proc exclLeaf(r: PRadixNode, a: int) =
@@ -70,9 +98,9 @@ proc exclLeaf(r: PRadixNode, a: int) =
     resetBit(x.b[a /% BitsPerUnit], a)
   of rnLeafLinear:
     var x = cast[ptr TRadixNodeLeafLinear](r)
-    var L = ze(x.len)
+    var L = int(x.len)
     for i in 0..L-1:
-      if ze(x.keys[i]) == a:
+      if int(x.keys[i]) == a:
         x.keys[i] = x.keys[L-1]
         dec(x.len)
         return
@@ -101,10 +129,10 @@ proc excl*(r: PRadixNode, a: ByteAddress): bool =
 proc addLeaf(r: var PRadixNode, a: int): bool =
   if r == nil:
     # a linear node:
-    var x = cast[ptr TRadixNodeLinear](alloc(sizeof(TRadixNodeLinear)))
+    var x = cast[ptr TRadixNodeLinear](alloc0(sizeof(TRadixNodeLinear)))
     x.kind = rnLeafLinear
-    x.len = 1'i8
-    x.keys[0] = toU8(a)
+    x.len = 1'u8
+    x.keys[0] = uint8(a)
     r = x
     return false # not already in set
   case r.kind
@@ -113,18 +141,18 @@ proc addLeaf(r: var PRadixNode, a: int): bool =
     return testOrSetBit(x.b[a /% BitsPerUnit], a)
   of rnLeafLinear:
     var x = cast[ptr TRadixNodeLeafLinear](r)
-    var L = ze(x.len)
+    var L = int(x.len)
     for i in 0..L-1:
-      if ze(x.keys[i]) == a: return true
+      if int(x.keys[i]) == a: return true
     if L <= high(x.keys):
-      x.keys[L] = toU8(a)
+      x.keys[L] = uint8(a)
       inc(x.len)
     else:
       # transform into a full node:
       var y = cast[ptr TRadixNodeLeafBits](alloc0(sizeof(TRadixNodeLeafBits)))
       y.kind = rnLeafBits
-      for i in 0..ze(x.len)-1:
-        var u = ze(x.keys[i])
+      for i in 0..int(x.len)-1:
+        var u = int(x.keys[i])
         setBit(y.b[u /% BitsPerUnit], u)
       setBit(y.b[a /% BitsPerUnit], a)
       dealloc(r)
@@ -137,28 +165,28 @@ proc addInner(r: var PRadixNode, a: int, d: int): bool =
   var k = a shr d and 0xff
   if r == nil:
     # a linear node:
-    var x = cast[ptr TRadixNodeLinear](alloc(sizeof(TRadixNodeLinear)))
+    var x = cast[ptr TRadixNodeLinear](alloc0(sizeof(TRadixNodeLinear)))
     x.kind = rnLinear
-    x.len = 1'i8
-    x.keys[0] = toU8(k)
+    x.len = 1'u8
+    x.keys[0] = uint8(k)
     r = x
     return addInner(x.vals[0], a, d-8)
   case r.kind
   of rnLinear:
     var x = cast[ptr TRadixNodeLinear](r)
-    var L = ze(x.len)
+    var L = int(x.len)
     for i in 0..L-1:
-      if ze(x.keys[i]) == k: # already exists
+      if int(x.keys[i]) == k: # already exists
         return addInner(x.vals[i], a, d-8)
     if L <= high(x.keys):
-      x.keys[L] = toU8(k)
+      x.keys[L] = uint8(k)
       inc(x.len)
       return addInner(x.vals[L], a, d-8)
     else:
       # transform into a full node:
       var y = cast[ptr TRadixNodeFull](alloc0(sizeof(TRadixNodeFull)))
       y.kind = rnFull
-      for i in 0..L-1: y.b[ze(x.keys[i])] = x.vals[i]
+      for i in 0..L-1: y.b[int(x.keys[i])] = x.vals[i]
       dealloc(r)
       r = y
       return addInner(y.b[k], a, d-8)
@@ -183,8 +211,8 @@ iterator innerElements(r: PRadixNode): tuple[prefix: int, n: PRadixNode] =
           yield (i, r.b[i])
     of rnLinear:
       var r = cast[ptr TRadixNodeLinear](r)
-      for i in 0..ze(r.len)-1:
-        yield (ze(r.keys[i]), r.vals[i])
+      for i in 0..int(r.len)-1:
+        yield (int(r.keys[i]), r.vals[i])
     else: assert(false)
 
 iterator leafElements(r: PRadixNode): int =
@@ -200,8 +228,8 @@ iterator leafElements(r: PRadixNode): int =
               yield i*BitsPerUnit+j
     of rnLeafLinear:
       var r = cast[ptr TRadixNodeLeafLinear](r)
-      for i in 0..ze(r.len)-1:
-        yield ze(r.keys[i])
+      for i in 0..int(r.len)-1:
+        yield int(r.keys[i])
     else: assert(false)
 
 iterator elements*(r: PRadixNode): ByteAddress {.inline.} =
@@ -218,102 +246,9 @@ proc main() =
     r: PRadixNode = nil
   for x in items(numbers):
     echo testOrIncl(r, x)
-  for x in elements(r): echo(x)
+  for x in elements(r):
+    # ByteAddress being defined as a signed integer cases trouble
+    # exactly here
+    echo(cast[uint](x))
 
 main()
-
-
-when false:
-  proc traverse(r: PRadixNode, prefix: int, d: int) =
-    if r == nil: return
-    case r.kind
-    of rnLeafBits:
-      assert(d == 0)
-      var x = cast[ptr TRadixNodeLeafBits](r)
-      # iterate over any bit:
-      for i in 0..high(x.b):
-        if x.b[i] != 0: # test all bits for zero
-          for j in 0..BitsPerUnit-1:
-            if testBit(x.b[i], j):
-              visit(prefix or i*BitsPerUnit+j)
-    of rnLeafLinear:
-      assert(d == 0)
-      var x = cast[ptr TRadixNodeLeafLinear](r)
-      for i in 0..ze(x.len)-1:
-        visit(prefix or ze(x.keys[i]))
-    of rnFull:
-      var x = cast[ptr TRadixNodeFull](r)
-      for i in 0..high(r.b):
-        if r.b[i] != nil:
-          traverse(r.b[i], prefix or (i shl d), d-8)
-    of rnLinear:
-      var x = cast[ptr TRadixNodeLinear](r)
-      for i in 0..ze(x.len)-1:
-        traverse(x.vals[i], prefix or (ze(x.keys[i]) shl d), d-8)
-
-  type
-    TRadixIter {.final.} = object
-      r: PRadixNode
-      p: int
-      x: int
-
-  proc init(i: var TRadixIter, r: PRadixNode) =
-    i.r = r
-    i.x = 0
-    i.p = 0
-
-  proc nextr(i: var TRadixIter): PRadixNode =
-    if i.r == nil: return nil
-    case i.r.kind
-    of rnFull:
-      var r = cast[ptr TRadixNodeFull](i.r)
-      while i.x <= high(r.b):
-        if r.b[i.x] != nil:
-          i.p = i.x
-          return r.b[i.x]
-        inc(i.x)
-    of rnLinear:
-      var r = cast[ptr TRadixNodeLinear](i.r)
-      if i.x < ze(r.len):
-        i.p = ze(r.keys[i.x])
-        result = r.vals[i.x]
-        inc(i.x)
-    else: assert(false)
-
-  proc nexti(i: var TRadixIter): int =
-    result = -1
-    case i.r.kind
-    of rnLeafBits:
-      var r = cast[ptr TRadixNodeLeafBits](i.r)
-      # iterate over any bit:
-      for i in 0..high(r.b):
-        if x.b[i] != 0: # test all bits for zero
-          for j in 0..BitsPerUnit-1:
-            if testBit(x.b[i], j):
-              visit(prefix or i*BitsPerUnit+j)
-    of rnLeafLinear:
-      var r = cast[ptr TRadixNodeLeafLinear](i.r)
-      if i.x < ze(r.len):
-        result = ze(r.keys[i.x])
-        inc(i.x)
-
-  iterator elements(r: PRadixNode): ByteAddress {.inline.} =
-    var
-      a, b, c, d: TRadixIter
-    init(a, r)
-    while true:
-      var x = nextr(a)
-      if x != nil:
-        init(b, x)
-        while true:
-          var y = nextr(b)
-          if y != nil:
-            init(c, y)
-            while true:
-              var z = nextr(c)
-              if z != nil:
-                init(d, z)
-                while true:
-                  var q = nexti(d)
-                  if q != -1:
-                    yield a.p shl 24 or b.p shl 16 or c.p shl 8 or q

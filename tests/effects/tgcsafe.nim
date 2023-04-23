@@ -1,10 +1,19 @@
 discard """
-  line: 17
-  errormsg: "'mainUnsafe' is not GC-safe"
+  errormsg: "'mainUnsafe' is not GC-safe as it performs an indirect call here"
+  line: 26
   cmd: "nim $target --hints:on --threads:on $options $file"
 """
 
-proc mymap(x: proc ()) =
+# bug #6955
+var global_proc: proc(a: string): int {.nimcall.} = nil
+
+proc myproc(i: int) {.gcsafe.} =
+  if global_proc != nil:
+    echo "a"
+  if isNil(global_proc):
+    return
+
+proc mymap(x: proc ()) {.effectsOf: x.} =
   x()
 
 var

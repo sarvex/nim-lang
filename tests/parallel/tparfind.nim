@@ -1,10 +1,11 @@
 discard """
+  matrix: "--mm:refc"
   output: "500"
 """
 
 import threadpool, sequtils
 
-{.experimental.}
+{.experimental: "parallel".}
 
 proc linearFind(a: openArray[int]; x, offset: int): int =
   for i, y in a:

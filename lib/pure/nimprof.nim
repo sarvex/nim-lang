@@ -8,16 +8,22 @@
 #
 
 ## Profiling support for Nim. This is an embedded profiler that requires
-## ``--profiler:on``. You only need to import this module to get a profiling
-## report at program exit.
+## `--profiler:on`. You only need to import this module to get a profiling
+## report at program exit. See `Embedded Stack Trace Profiler <estp.html>`_
+## for usage.
 
 when not defined(profiler) and not defined(memProfiler):
-  {.warning: "Profiling support is turned off!".}
+  {.error: "Profiling support is turned off! Enable profiling by passing `--profiler:on --stackTrace:on` to the compiler (see the Nim Compiler User Guide for more options).".}
+
+{.used.}
 
 # We don't want to profile the profiling code ...
 {.push profiler: off.}
 
 import hashes, algorithm, strutils, tables, sets
+
+when defined(nimPreviewSlimSystem):
+  import std/[syncio, sysatomics]
 
 when not defined(memProfiler):
   include "system/timers"
@@ -27,19 +33,20 @@ const
   tickCountCorrection = 50_000
 
 when not declared(system.StackTrace):
-  type StackTrace = array [0..20, cstring]
-  {.deprecated: [TStackTrace: StackTrace].}
+  type StackTrace = object
+    lines: array[0..20, cstring]
+    files: array[0..20, cstring]
+  proc `[]`*(st: StackTrace, i: int): cstring = st.lines[i]
 
 # We use a simple hash table of bounded size to keep track of the stack traces:
 type
   ProfileEntry = object
     total: int
     st: StackTrace
-  ProfileData = array [0..64*1024-1, ptr ProfileEntry]
-{.deprecated: [TProfileEntry: ProfileEntry, TProfileData: ProfileData].}
+  ProfileData = array[0..64*1024-1, ptr ProfileEntry]
 
 proc `==`(a, b: StackTrace): bool =
-  for i in 0 .. high(a):
+  for i in 0 .. high(a.lines):
     if a[i] != b[i]: return false
   result = true
 
@@ -72,7 +79,7 @@ proc hookAux(st: StackTrace, costs: int) =
   # this is quite performance sensitive!
   when withThreads: acquire profilingLock
   inc totalCalls
-  var last = high(st)
+  var last = high(st.lines)
   while last > 0 and isNil(st[last]): dec last
   var h = hash(pointer(st[last])) and high(profileData)
 
@@ -177,8 +184,8 @@ proc writeProfile() {.noconv.} =
 
     var perProc = initCountTable[string]()
     for i in 0..entries-1:
-      var dups = initSet[string]()
-      for ii in 0..high(StackTrace):
+      var dups = initHashSet[string]()
+      for ii in 0..high(StackTrace.lines):
         let procname = profileData[i].st[ii]
         if isNil(procname): break
         let p = $procname
@@ -193,10 +200,12 @@ proc writeProfile() {.noconv.} =
         writeLine(f, "Entry: ", i+1, "/", entries, " Calls: ",
           profileData[i].total // totalCalls, " [sum: ", sum, "; ",
           sum // totalCalls, "]")
-        for ii in 0..high(StackTrace):
+        for ii in 0..high(StackTrace.lines):
           let procname = profileData[i].st[ii]
+          let filename = profileData[i].st.files[ii]
           if isNil(procname): break
-          writeLine(f, "  ", procname, " ", perProc[$procname] // totalCalls)
+          writeLine(f, "  ", $filename & ": " & $procname, " ",
+                    perProc[$procname] // totalCalls)
     close(f)
     echo "... done"
   else:
@@ -216,8 +225,9 @@ proc enableProfiling*() =
       system.profilingRequestedHook = requestedHook
 
 when declared(system.StackTrace):
+  import std/exitprocs
   system.profilingRequestedHook = requestedHook
   system.profilerHook = hook
-  addQuitProc(writeProfile)
+  addExitProc(writeProfile)
 
 {.pop.}

@@ -10,86 +10,147 @@
 # This module handles the conditional symbols.
 
 import
-  strtabs, platform, strutils, idents
+  strtabs
 
-# We need to use a StringTableRef here as defined symbols are always guaranteed
-# to be style insensitive. Otherwise hell would break lose.
-var gSymbols: StringTableRef
+from options import Feature
+from lineinfos import hintMin, hintMax, warnMin, warnMax
 
-const
-  catNone = "false"
+proc defineSymbol*(symbols: StringTableRef; symbol: string, value: string = "true") =
+  symbols[symbol] = value
 
-proc defineSymbol*(symbol: string) =
-  gSymbols[symbol] = "true"
+proc undefSymbol*(symbols: StringTableRef; symbol: string) =
+  symbols.del(symbol)
 
-proc undefSymbol*(symbol: string) =
-  gSymbols[symbol] = catNone
+#proc lookupSymbol*(symbols: StringTableRef; symbol: string): string =
+#  result = if isDefined(symbol): gSymbols[symbol] else: nil
 
-proc isDefined*(symbol: string): bool =
-  if gSymbols.hasKey(symbol):
-    result = gSymbols[symbol] != catNone
-  elif cmpIgnoreStyle(symbol, CPU[targetCPU].name) == 0:
-    result = true
-  elif cmpIgnoreStyle(symbol, platform.OS[targetOS].name) == 0:
-    result = true
-  else:
-    case symbol.normalize
-    of "x86": result = targetCPU == cpuI386
-    of "itanium": result = targetCPU == cpuIa64
-    of "x8664": result = targetCPU == cpuAmd64
-    of "posix", "unix":
-      result = targetOS in {osLinux, osMorphos, osSkyos, osIrix, osPalmos,
-                            osQnx, osAtari, osAix,
-                            osHaiku, osVxWorks, osSolaris, osNetbsd,
-                            osFreebsd, osOpenbsd, osMacosx}
-    of "bsd":
-      result = targetOS in {osNetbsd, osFreebsd, osOpenbsd}
-    of "emulatedthreadvars":
-      result = platform.OS[targetOS].props.contains(ospLacksThreadVars)
-    of "msdos": result = targetOS == osDos
-    of "mswindows", "win32": result = targetOS == osWindows
-    of "macintosh": result = targetOS in {osMacos, osMacosx}
-    of "sunos": result = targetOS == osSolaris
-    of "littleendian": result = CPU[targetCPU].endian == platform.littleEndian
-    of "bigendian": result = CPU[targetCPU].endian == platform.bigEndian
-    of "cpu8": result = CPU[targetCPU].bit == 8
-    of "cpu16": result = CPU[targetCPU].bit == 16
-    of "cpu32": result = CPU[targetCPU].bit == 32
-    of "cpu64": result = CPU[targetCPU].bit == 64
-    of "nimrawsetjmp":
-      result = targetOS in {osSolaris, osNetbsd, osFreebsd, osOpenbsd, osMacosx}
-    else: discard
+iterator definedSymbolNames*(symbols: StringTableRef): string =
+  for key in keys(symbols):
+    yield key
 
-proc isDefined*(symbol: PIdent): bool = isDefined(symbol.s)
+proc countDefinedSymbols*(symbols: StringTableRef): int =
+  symbols.len
 
-iterator definedSymbolNames*: string =
-  for key, val in pairs(gSymbols):
-    if val != catNone: yield key
-
-proc countDefinedSymbols*(): int =
-  result = 0
-  for key, val in pairs(gSymbols):
-    if val != catNone: inc(result)
-
-proc initDefines*() =
-  gSymbols = newStringTable(modeStyleInsensitive)
-  defineSymbol("nimrod") # 'nimrod' is always defined
+proc initDefines*(symbols: StringTableRef) =
   # for bootstrapping purposes and old code:
-  defineSymbol("nimhygiene")
-  defineSymbol("niminheritable")
-  defineSymbol("nimmixin")
-  defineSymbol("nimeffects")
-  defineSymbol("nimbabel")
-  defineSymbol("nimcomputedgoto")
-  defineSymbol("nimunion")
-  defineSymbol("nimnewshared")
-  defineSymbol("nimrequiresnimframe")
-  defineSymbol("nimparsebiggestfloatmagic")
-  defineSymbol("nimalias")
-  defineSymbol("nimlocks")
-  defineSymbol("nimnode")
-  defineSymbol("nimnomagic64")
-  defineSymbol("nimvarargstyped")
-  defineSymbol("nimtypedescfixed")
-  defineSymbol("nimKnowsNimvm")
-  defineSymbol("nimArrIdx")
+  template defineSymbol(s) = symbols.defineSymbol(s)
+  defineSymbol("nimhygiene") # deadcode
+  defineSymbol("niminheritable") # deadcode
+  defineSymbol("nimmixin") # deadcode
+  defineSymbol("nimeffects") # deadcode
+  defineSymbol("nimbabel") # deadcode
+  defineSymbol("nimcomputedgoto") # deadcode
+  defineSymbol("nimunion") # deadcode
+  defineSymbol("nimnewshared") # deadcode
+  defineSymbol("nimNewTypedesc") # deadcode
+  defineSymbol("nimrequiresnimframe") # deadcode
+  defineSymbol("nimparsebiggestfloatmagic") # deadcode
+  defineSymbol("nimalias") # deadcode
+  defineSymbol("nimlocks") # deadcode
+  defineSymbol("nimnode") # deadcode pending `nimnode` reference in opengl package
+    # refs https://github.com/nim-lang/opengl/pull/79
+  defineSymbol("nimvarargstyped") # deadcode
+  defineSymbol("nimtypedescfixed") # deadcode
+  defineSymbol("nimKnowsNimvm") # deadcode
+  defineSymbol("nimArrIdx") # deadcode
+  defineSymbol("nimHasalignOf") # deadcode
+  defineSymbol("nimDistros") # deadcode
+  defineSymbol("nimHasCppDefine") # deadcode
+  defineSymbol("nimGenericInOutFlags") # deadcode
+  when false: defineSymbol("nimHasOpt") # deadcode
+  defineSymbol("nimNoArrayToCstringConversion") # deadcode
+  defineSymbol("nimHasRunnableExamples") # deadcode
+  defineSymbol("nimNewDot") # deadcode
+  defineSymbol("nimHasNilChecks") # deadcode
+  defineSymbol("nimSymKind") # deadcode
+  defineSymbol("nimVmEqIdent") # deadcode
+  defineSymbol("nimNoNil") # deadcode
+  defineSymbol("nimNoZeroTerminator") # deadcode
+  defineSymbol("nimNotNil") # deadcode
+  defineSymbol("nimVmExportFixed") # deadcode
+  defineSymbol("nimHasSymOwnerInMacro") # deadcode
+  defineSymbol("nimNewRuntime") # deadcode
+  defineSymbol("nimIncrSeqV3") # deadcode
+  defineSymbol("nimAshr") # deadcode
+  defineSymbol("nimNoNilSeqs") # deadcode
+  defineSymbol("nimNoNilSeqs2") # deadcode
+  defineSymbol("nimHasUserErrors") # deadcode
+  defineSymbol("nimUncheckedArrayTyp") # deadcode
+  defineSymbol("nimHasTypeof") # deadcode
+  defineSymbol("nimErrorProcCanHaveBody") # deadcode
+  defineSymbol("nimHasInstantiationOfInMacro") # deadcode
+  defineSymbol("nimHasHotCodeReloading") # deadcode
+  defineSymbol("nimHasNilSeqs") # deadcode
+  defineSymbol("nimHasSignatureHashInMacro") # deadcode
+  defineSymbol("nimHasDefault") # deadcode
+  defineSymbol("nimMacrosSizealignof") # deadcode
+  defineSymbol("nimNoZeroExtendMagic") # deadcode
+  defineSymbol("nimMacrosGetNodeId") # deadcode
+  defineSymbol("nimFixedForwardGeneric") # deadcode
+  defineSymbol("nimToOpenArrayCString") # deadcode
+  defineSymbol("nimHasUsed") # deadcode
+  defineSymbol("nimnomagic64") # deadcode
+  defineSymbol("nimNewShiftOps") # deadcode
+  defineSymbol("nimHasCursor") # deadcode
+  defineSymbol("nimAlignPragma") # deadcode
+  defineSymbol("nimHasExceptionsQuery") # deadcode
+  defineSymbol("nimHasIsNamedTuple") # deadcode
+  defineSymbol("nimHashOrdinalFixed") # deadcode
+  defineSymbol("nimHasSinkInference") # deadcode
+  defineSymbol("nimNewIntegerOps") # deadcode
+  defineSymbol("nimHasInvariant") # deadcode
+
+
+
+  for f in Feature:
+    defineSymbol("nimHas" & $f)
+
+  for s in warnMin..warnMax:
+    defineSymbol("nimHasWarning" & $s)
+  for s in hintMin..hintMax:
+    defineSymbol("nimHasHint" & $s)
+
+  defineSymbol("nimFixedOwned")
+  defineSymbol("nimHasStyleChecks")
+
+  when defined(nimHasLibFFI):
+    # Renaming as we can't conflate input vs output define flags; e.g. this
+    # will report the right thing regardless of whether user adds
+    # `-d:nimHasLibFFI` in his user config.
+    defineSymbol("nimHasLibFFIEnabled") # deadcode
+
+  defineSymbol("nimHasStacktraceMsgs") # deadcode
+  defineSymbol("nimDoesntTrackDefects")
+  defineSymbol("nimHasLentIterators") # deadcode
+  defineSymbol("nimHasDeclaredMagic") # deadcode
+  defineSymbol("nimHasStacktracesModule") # deadcode
+  defineSymbol("nimHasEffectTraitsModule")
+  defineSymbol("nimHasCastPragmaBlocks")
+  defineSymbol("nimHasDeclaredLocs")
+  defineSymbol("nimHasJsBigIntBackend")
+  defineSymbol("nimHasWarningAsError")
+  defineSymbol("nimHasHintAsError")
+  defineSymbol("nimHasSpellSuggest")
+  defineSymbol("nimHasCustomLiterals")
+  defineSymbol("nimHasUnifiedTuple")
+  defineSymbol("nimHasIterable")
+  defineSymbol("nimHasTypeofVoid") # deadcode
+  defineSymbol("nimHasDragonBox") # deadcode
+  defineSymbol("nimHasHintAll")
+  defineSymbol("nimHasTrace")
+  defineSymbol("nimHasEffectsOf")
+
+  defineSymbol("nimHasEnforceNoRaises")
+  defineSymbol("nimHasTopDownInference")
+  defineSymbol("nimHasTemplateRedefinitionPragma")
+  defineSymbol("nimHasCstringCase")
+  defineSymbol("nimHasCallsitePragma")
+  defineSymbol("nimHasAmbiguousEnumHint")
+
+  defineSymbol("nimHasWarnCastSizes")
+  defineSymbol("nimHasOutParams")
+  defineSymbol("nimHasSystemRaisesDefect")
+  defineSymbol("nimHasWarnUnnamedBreak")
+  defineSymbol("nimHasGenericDefine")
+  defineSymbol("nimHasDefineAliases")
+  defineSymbol("nimHasWarnBareExcept")

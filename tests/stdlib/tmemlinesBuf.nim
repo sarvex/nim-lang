@@ -1,6 +1,9 @@
-import memfiles
-var inp = memfiles.open("readme.txt")
-var buffer: TaintedString = ""
+import std/[memfiles, assertions]
+var inp = memfiles.open("tests/stdlib/tmemlinesBuf.nim")
+var buffer: string = ""
+var lineCount = 0
 for line in lines(inp, buffer):
-  echo("#" & line & "#")
+  lineCount += 1
+
 close(inp)
+doAssert lineCount == 9, $lineCount # this file's number of lines

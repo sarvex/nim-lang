@@ -1,9 +1,11 @@
 discard """
+  matrix: "--mm:refc"
   output: '''foobarfoobar
 bazbearbazbear
 
 1'''
   cmd: "nim $target --threads:on $options $file"
+  disabled: "openbsd"
 """
 
 import threadpool

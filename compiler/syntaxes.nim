@@ -10,83 +10,36 @@
 ## Implements the dispatcher for the different parsers.
 
 import
-  strutils, llstream, ast, astalgo, idents, lexer, options, msgs, parser,
-  pbraces, filters, filter_tmpl, renderer
+  strutils, llstream, ast, idents, lexer, options, msgs, parser,
+  filters, filter_tmpl, renderer, lineinfos, pathutils
+
+when defined(nimPreviewSlimSystem):
+  import std/[syncio, assertions]
+
+export Parser, parseAll, parseTopLevelStmt, checkFirstLineIndentation, closeParser
 
 type
-  TFilterKind* = enum
-    filtNone, filtTemplate, filtReplace, filtStrip
-  TParserKind* = enum
-    skinStandard, skinStrongSpaces, skinBraces, skinEndX
-
-const
-  parserNames*: array[TParserKind, string] = ["standard", "strongspaces",
-                                              "braces", "endx"]
-  filterNames*: array[TFilterKind, string] = ["none", "stdtmpl", "replace",
-                                              "strip"]
-
-type
-  TParsers*{.final.} = object
-    skin*: TParserKind
-    parser*: TParser
-
-
-proc parseFile*(fileIdx: int32): PNode{.procvar.}
-proc openParsers*(p: var TParsers, fileIdx: int32, inputstream: PLLStream)
-proc closeParsers*(p: var TParsers)
-proc parseAll*(p: var TParsers): PNode
-proc parseTopLevelStmt*(p: var TParsers): PNode
-  # implements an iterator. Returns the next top-level statement or nil if end
-  # of stream.
-
-# implementation
-
-proc parseFile(fileIdx: int32): PNode =
-  var
-    p: TParsers
-    f: File
-  let filename = fileIdx.toFullPathConsiderDirty
-  if not open(f, filename):
-    rawMessage(errCannotOpenFile, filename)
-    return
-  openParsers(p, fileIdx, llStreamOpen(f))
-  result = parseAll(p)
-  closeParsers(p)
-
-proc parseAll(p: var TParsers): PNode =
-  case p.skin
-  of skinStandard, skinStrongSpaces:
-    result = parser.parseAll(p.parser)
-  of skinBraces:
-    result = pbraces.parseAll(p.parser)
-  of skinEndX:
-    internalError("parser to implement")
-    result = ast.emptyNode
-
-proc parseTopLevelStmt(p: var TParsers): PNode =
-  case p.skin
-  of skinStandard, skinStrongSpaces:
-    result = parser.parseTopLevelStmt(p.parser)
-  of skinBraces:
-    result = pbraces.parseTopLevelStmt(p.parser)
-  of skinEndX:
-    internalError("parser to implement")
-    result = ast.emptyNode
+  FilterKind = enum
+    filtNone = "none"
+    filtTemplate = "stdtmpl"
+    filtReplace = "replace"
+    filtStrip = "strip"
 
 proc utf8Bom(s: string): int =
-  if (s[0] == '\xEF') and (s[1] == '\xBB') and (s[2] == '\xBF'):
-    result = 3
+  if s.len >= 3 and s[0] == '\xEF' and s[1] == '\xBB' and s[2] == '\xBF':
+    3
   else:
-    result = 0
+    0
 
 proc containsShebang(s: string, i: int): bool =
-  if (s[i] == '#') and (s[i + 1] == '!'):
+  if i+1 < s.len and s[i] == '#' and s[i+1] == '!':
     var j = i + 2
-    while s[j] in Whitespace: inc(j)
+    while j < s.len and s[j] in Whitespace: inc(j)
     result = s[j] == '/'
 
-proc parsePipe(filename: string, inputStream: PLLStream): PNode =
-  result = ast.emptyNode
+proc parsePipe(filename: AbsoluteFile, inputStream: PLLStream; cache: IdentCache;
+               config: ConfigRef): PNode =
+  result = newNode(nkEmpty)
   var s = llStreamOpen(filename, fmRead)
   if s != nil:
     var line = newStringOfCap(80)
@@ -97,86 +50,89 @@ proc parsePipe(filename: string, inputStream: PLLStream): PNode =
       discard llStreamReadLine(s, line)
       i = 0
       inc linenumber
-    if line[i] == '#' and line[i+1] in {'?', '!'}:
-      if line[i+1] == '!':
-        message(newLineInfo(filename, linenumber, 1),
-                warnDeprecated, "use '#?' instead; '#!'")
-      inc(i, 2)
-      while line[i] in Whitespace: inc(i)
-      var q: TParser
-      openParser(q, filename, llStreamOpen(substr(line, i)))
-      result = parser.parseAll(q)
-      closeParser(q)
+    if i+1 < line.len and line[i] == '#' and line[i+1] == '?':
+      when defined(nimpretty):
+        # XXX this is a bit hacky, but oh well...
+        config.quitOrRaise "can't nimpretty a source code filter: " & $filename
+      else:
+        inc(i, 2)
+        while i < line.len and line[i] in Whitespace: inc(i)
+        var p: Parser
+        openParser(p, filename, llStreamOpen(substr(line, i)), cache, config)
+        result = parseAll(p)
+        closeParser(p)
     llStreamClose(s)
 
-proc getFilter(ident: PIdent): TFilterKind =
-  for i in countup(low(TFilterKind), high(TFilterKind)):
-    if identEq(ident, filterNames[i]):
+proc getFilter(ident: PIdent): FilterKind =
+  for i in FilterKind:
+    if cmpIgnoreStyle(ident.s, $i) == 0:
       return i
-  result = filtNone
 
-proc getParser(ident: PIdent): TParserKind =
-  for i in countup(low(TParserKind), high(TParserKind)):
-    if identEq(ident, parserNames[i]):
-      return i
-  rawMessage(errInvalidDirectiveX, ident.s)
-
-proc getCallee(n: PNode): PIdent =
-  if n.kind in nkCallKinds and n.sons[0].kind == nkIdent:
-    result = n.sons[0].ident
+proc getCallee(conf: ConfigRef; n: PNode): PIdent =
+  if n.kind in nkCallKinds and n[0].kind == nkIdent:
+    result = n[0].ident
   elif n.kind == nkIdent:
     result = n.ident
   else:
-    rawMessage(errXNotAllowedHere, renderTree(n))
+    localError(conf, n.info, "invalid filter: " & renderTree(n))
 
-proc applyFilter(p: var TParsers, n: PNode, filename: string,
+proc applyFilter(p: var Parser, n: PNode, filename: AbsoluteFile,
                  stdin: PLLStream): PLLStream =
-  var ident = getCallee(n)
-  var f = getFilter(ident)
-  case f
-  of filtNone:
-    p.skin = getParser(ident)
-    result = stdin
-  of filtTemplate:
-    result = filterTmpl(stdin, filename, n)
-  of filtStrip:
-    result = filterStrip(stdin, filename, n)
-  of filtReplace:
-    result = filterReplace(stdin, filename, n)
+  var f = getFilter(getCallee(p.lex.config, n))
+  result = case f
+           of filtNone:
+             stdin
+           of filtTemplate:
+             filterTmpl(p.lex.config, stdin, filename, n)
+           of filtStrip:
+             filterStrip(p.lex.config, stdin, filename, n)
+           of filtReplace:
+             filterReplace(p.lex.config, stdin, filename, n)
   if f != filtNone:
-    if hintCodeBegin in gNotes:
-      rawMessage(hintCodeBegin, [])
-      msgWriteln(result.s)
-      rawMessage(hintCodeEnd, [])
+    assert p.lex.config != nil
+    if p.lex.config.hasHint(hintCodeBegin):
+      rawMessage(p.lex.config, hintCodeBegin, "")
+      msgWriteln(p.lex.config, result.s)
+      rawMessage(p.lex.config, hintCodeEnd, "")
 
-proc evalPipe(p: var TParsers, n: PNode, filename: string,
+proc evalPipe(p: var Parser, n: PNode, filename: AbsoluteFile,
               start: PLLStream): PLLStream =
+  assert p.lex.config != nil
   result = start
   if n.kind == nkEmpty: return
-  if n.kind == nkInfix and n.sons[0].kind == nkIdent and
-      identEq(n.sons[0].ident, "|"):
-    for i in countup(1, 2):
-      if n.sons[i].kind == nkInfix:
-        result = evalPipe(p, n.sons[i], filename, result)
+  if n.kind == nkInfix and n[0].kind == nkIdent and n[0].ident.s == "|":
+    for i in 1..2:
+      if n[i].kind == nkInfix:
+        result = evalPipe(p, n[i], filename, result)
       else:
-        result = applyFilter(p, n.sons[i], filename, result)
+        result = applyFilter(p, n[i], filename, result)
   elif n.kind == nkStmtList:
-    result = evalPipe(p, n.sons[0], filename, result)
+    result = evalPipe(p, n[0], filename, result)
   else:
     result = applyFilter(p, n, filename, result)
 
-proc openParsers(p: var TParsers, fileIdx: int32, inputstream: PLLStream) =
-  var s: PLLStream
-  p.skin = skinStandard
-  let filename = fileIdx.toFullPathConsiderDirty
-  var pipe = parsePipe(filename, inputstream)
-  if pipe != nil: s = evalPipe(p, pipe, filename, inputstream)
-  else: s = inputstream
-  case p.skin
-  of skinStandard, skinBraces, skinEndX:
-    parser.openParser(p.parser, fileIdx, s, false)
-  of skinStrongSpaces:
-    parser.openParser(p.parser, fileIdx, s, true)
+proc openParser*(p: var Parser, fileIdx: FileIndex, inputstream: PLLStream;
+                  cache: IdentCache; config: ConfigRef) =
+  assert config != nil
+  let filename = toFullPathConsiderDirty(config, fileIdx)
+  var pipe = parsePipe(filename, inputstream, cache, config)
+  p.lex.config = config
+  let s = if pipe != nil: evalPipe(p, pipe, filename, inputstream)
+          else: inputstream
+  parser.openParser(p, fileIdx, s, cache, config)
 
-proc closeParsers(p: var TParsers) =
-  parser.closeParser(p.parser)
+proc setupParser*(p: var Parser; fileIdx: FileIndex; cache: IdentCache;
+                   config: ConfigRef): bool =
+  let filename = toFullPathConsiderDirty(config, fileIdx)
+  var f: File
+  if not open(f, filename.string):
+    rawMessage(config, errGenerated, "cannot open file: " & filename.string)
+    return false
+  openParser(p, fileIdx, llStreamOpen(f), cache, config)
+  result = true
+
+proc parseFile*(fileIdx: FileIndex; cache: IdentCache; config: ConfigRef): PNode =
+  var p: Parser
+  if setupParser(p, fileIdx, cache, config):
+    result = parseAll(p)
+    closeParser(p)
