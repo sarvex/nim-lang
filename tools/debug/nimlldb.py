@@ -21,7 +21,7 @@ def get_nti(value: lldb.SBValue, nim_name=None):
     type_nim_name = nim_name or name_split[1]
     id_string = name_split[-1].split(" ")[0]
 
-    type_info_name = "NTI" + type_nim_name.lower() + "__" + id_string + "_"
+    type_info_name = f"NTI{type_nim_name.lower()}__{id_string}_"
     nti = value.target.FindFirstGlobalVariable(type_info_name)
     if not nti.IsValid():
         type_info_name = "NTI" + "__" + id_string + "_"
@@ -34,14 +34,11 @@ def get_nti(value: lldb.SBValue, nim_name=None):
 def enum_to_string(value: lldb.SBValue, int_val=None, nim_name=None):
     tname = nim_name or value.type.name.split("_")[1]
 
-    enum_val = value.signed
-    if int_val is not None:
-        enum_val = int_val
-
+    enum_val = int_val if int_val is not None else value.signed
     default_val = f"{tname}.{str(enum_val)}"
 
     fn_syms = value.target.FindFunctions("reprEnum")
-    if not fn_syms.GetSize() > 0:
+    if fn_syms.GetSize() <= 0:
         return default_val
 
     fn_sym: lldb.SBSymbolContext = fn_syms.GetContextAtIndex(0)
@@ -61,14 +58,11 @@ def enum_to_string(value: lldb.SBValue, int_val=None, nim_name=None):
     if not nti.IsValid():
         return default_val
 
-    call = f"{fn.name}(({arg1_type.name}){enum_val}, ({arg2_type.name})" + str(nti.GetLoadAddress()) + ");"
+    call = f"{fn.name}(({arg1_type.name}){enum_val}, ({arg2_type.name}){str(nti.GetLoadAddress())});"
 
     res = executeCommand(call)
 
-    if res.error.fail:
-        return default_val
-
-    return f"{tname}.{res.summary[1:-1]}"
+    return default_val if res.error.fail else f"{tname}.{res.summary[1:-1]}"
 
 
 def to_string(value: lldb.SBValue):
@@ -130,23 +124,15 @@ def to_stringV2(value: lldb.SBValue):
 
 
 def NimString(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
+    if custom_summary is not None:
         return custom_summary
 
-    if NIM_IS_V2:
-        res = to_stringV2(value)
-    else:
-        res = to_string(value)
-
-    if res is not None:
-        return f'"{res}"'
-    else:
-        return "nil"
+    res = to_stringV2(value) if NIM_IS_V2 else to_string(value)
+    return f'"{res}"' if res is not None else "nil"
 
 
 def rope_helper(value: lldb.SBValue) -> str:
@@ -157,11 +143,7 @@ def rope_helper(value: lldb.SBValue) -> str:
     if value["length"].unsigned == 0:
         return ""
 
-    if NIM_IS_V2:
-        str_val = to_stringV2(value["data"])
-    else:
-        str_val = to_string(value["data"])
-
+    str_val = to_stringV2(value["data"]) if NIM_IS_V2 else to_string(value["data"])
     if str_val is None:
         str_val = ""
 
@@ -169,28 +151,22 @@ def rope_helper(value: lldb.SBValue) -> str:
 
 
 def Rope(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
+    if custom_summary is not None:
         return custom_summary
 
     rope_str = rope_helper(value)
 
-    if len(rope_str) == 0:
-        rope_str = "nil"
-    else:
-        rope_str = f'"{rope_str}"'
-
+    rope_str = "nil" if len(rope_str) == 0 else f'"{rope_str}"'
     return f"Rope({rope_str})"
 
 
 def NCSTRING(value: lldb.SBValue, internal_dict=None):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     ty = value.Dereference().type
     val = value.target.CreateValueFromAddress(
@@ -200,9 +176,8 @@ def NCSTRING(value: lldb.SBValue, internal_dict=None):
 
 
 def ObjectV2(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     orig_value = value.GetNonSyntheticValue()
     if orig_value.type.is_pointer and orig_value.unsigned == 0:
@@ -221,86 +196,63 @@ def ObjectV2(value: lldb.SBValue, internal_dict):
         obj_name = orig_value.type.name
 
     num_children = value.num_children
-    fields = []
-
-    for i in range(num_children):
-        fields.append(f"{value[i].name}: {value[i].summary}")
-
-    res = f"{obj_name}(" + ", ".join(fields) + ")"
-    return res
+    fields = [f"{value[i].name}: {value[i].summary}" for i in range(num_children)]
+    return f"{obj_name}(" + ", ".join(fields) + ")"
 
 
 def Number(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     if value.type.is_pointer and value.signed == 0:
         return "nil"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
-        return custom_summary
-
-    return str(value.signed)
+    return custom_summary if custom_summary is not None else str(value.signed)
 
 
 def Float(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
-        return custom_summary
-
-    return str(value.value)
+    return custom_summary if custom_summary is not None else str(value.value)
 
 
 def UnsignedNumber(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
-        return custom_summary
-
-    return str(value.unsigned)
+    return custom_summary if custom_summary is not None else str(value.unsigned)
 
 
 def Bool(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
-        return custom_summary
-
-    return str(value.value)
+    return custom_summary if custom_summary is not None else str(value.value)
 
 
 def CharArray(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
+    if custom_summary is not None:
         return custom_summary
 
     return str([f"'{char}'" for char in value.uint8s])
 
 
 def Array(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     value = value.GetNonSyntheticValue()
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
+    if custom_summary is not None:
         return custom_summary
 
     value = value.GetNonSyntheticValue()
@@ -308,12 +260,11 @@ def Array(value: lldb.SBValue, internal_dict):
 
 
 def Tuple(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
+    if custom_summary is not None:
         return custom_summary
 
     while value.type.is_pointer:
@@ -331,48 +282,37 @@ def Tuple(value: lldb.SBValue, internal_dict):
         else:
             fields.append(f"{key}: {val}")
 
-    return "(" + ", ".join(fields) + f")"
+    return "(" + ", ".join(fields) + ")"
 
 
 def is_local(value: lldb.SBValue) -> bool:
     line: lldb.SBLineEntry = value.frame.GetLineEntry()
     decl: lldb.SBDeclaration = value.GetDeclaration()
 
-    if line.file == decl.file and decl.line != 0:
-        return True
-
-    return False
+    return line.file == decl.file and decl.line != 0
 
 
 def is_in_scope(value: lldb.SBValue) -> bool:
     line: lldb.SBLineEntry = value.frame.GetLineEntry()
     decl: lldb.SBDeclaration = value.GetDeclaration()
 
-    if is_local(value) and decl.line < line.line:
-        return True
-
-    return False
+    return bool(is_local(value) and decl.line < line.line)
 
 
 def Enum(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_value_summary(value)
-    if custom_summary is not None:
-        return custom_summary
-
-    return enum_to_string(value)
+    return custom_summary if custom_summary is not None else enum_to_string(value)
 
 
 def EnumSet(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
+    if custom_summary is not None:
         return custom_summary
 
     vals = []
@@ -387,9 +327,8 @@ def EnumSet(value: lldb.SBValue, internal_dict):
 
 
 def Set(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
     if custom_summary is not None:
@@ -407,9 +346,8 @@ def Set(value: lldb.SBValue, internal_dict):
 
 
 def Table(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
     if custom_summary is not None:
@@ -426,29 +364,23 @@ def Table(value: lldb.SBValue, internal_dict):
 
 
 def HashSet(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
     if custom_summary is not None:
         return custom_summary
 
-    fields = []
-
-    for i in range(value.num_children):
-        fields.append(f"{value[i].summary}")
-
+    fields = [f"{value[i].summary}" for i in range(value.num_children)]
     return "HashSet({" + ", ".join(fields) + "})"
 
 
 def StringTable(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
+    if custom_summary is not None:
         return custom_summary
 
     fields = []
@@ -464,12 +396,11 @@ def StringTable(value: lldb.SBValue, internal_dict):
 
 
 def Sequence(value: lldb.SBValue, internal_dict):
-    if is_local(value):
-        if not is_in_scope(value):
-            return "undefined"
+    if is_local(value) and not is_in_scope(value):
+        return "undefined"
 
     custom_summary = get_custom_summary(value)
-    if not custom_summary is None:
+    if custom_summary is not None:
         return custom_summary
 
     return "@[" + ", ".join([value[i].summary for i in range(value.num_children)]) + "]"
@@ -494,7 +425,9 @@ class StringChildrenProvider:
 
     def get_child_at_index(self, index):
         offset = index * self.data_size
-        return self.first_element.CreateChildAtOffset("[" + str(index) + "]", offset, self.data_type)
+        return self.first_element.CreateChildAtOffset(
+            f"[{str(index)}]", offset, self.data_type
+        )
 
     def get_data(self) -> lldb.SBValue:
         return self.value["p"]["data"] if NIM_IS_V2 else self.value["data"]
@@ -513,10 +446,6 @@ class StringChildrenProvider:
 
             # Check if first element is NULL
             base_data_type = data.type.GetArrayElementType().GetTypedefedType()
-            cast = data.Cast(base_data_type)
-
-            if cast.unsigned == 0:
-                return 0
         else:
             if self.value.type.is_pointer and self.value.unsigned == 0:
                 return 0
@@ -530,17 +459,13 @@ class StringChildrenProvider:
 
             # Check if first element is NULL
             base_data_type = self.value.target.FindFirstType("char")
-            cast = data.Cast(base_data_type)
+        cast = data.Cast(base_data_type)
 
-            if cast.unsigned == 0:
-                return 0
-
-        return size
+        return 0 if cast.unsigned == 0 else size
 
     def update(self):
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
 
         data = self.get_data()
         size = self.get_len()
@@ -572,7 +497,9 @@ class ArrayChildrenProvider:
 
     def get_child_at_index(self, index):
         offset = index * self.value[index].GetByteSize()
-        return self.first_element.CreateChildAtOffset("[" + str(index) + "]", offset, self.data_type)
+        return self.first_element.CreateChildAtOffset(
+            f"[{str(index)}]", offset, self.data_type
+        )
 
     def update(self):
         if not self.has_children():
@@ -582,9 +509,8 @@ class ArrayChildrenProvider:
         self.data_type = self.value.type.GetArrayElementType()
 
     def has_children(self):
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return False
+        if is_local(self.value) and not is_in_scope(self.value):
+            return False
         return bool(self.value.num_children)
 
 
@@ -605,7 +531,9 @@ class SeqChildrenProvider:
 
     def get_child_at_index(self, index):
         offset = index * self.data[index].GetByteSize()
-        return self.first_element.CreateChildAtOffset("[" + str(index) + "]", offset, self.data_type)
+        return self.first_element.CreateChildAtOffset(
+            f"[{str(index)}]", offset, self.data_type
+        )
 
     def get_data(self) -> lldb.SBValue:
         return self.value["p"]["data"] if NIM_IS_V2 else self.value["data"]
@@ -616,9 +544,8 @@ class SeqChildrenProvider:
     def update(self):
         self.count = 0
 
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
 
         self.count = self.get_len().unsigned
 
@@ -658,9 +585,8 @@ class ObjectChildrenProvider:
         self.children.clear()
         self.child_list = []
 
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
 
         stack = [self.value.GetNonSyntheticValue()]
 
@@ -717,9 +643,8 @@ class HashSetChildrenProvider:
     def update(self):
         self.child_list = []
 
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
 
         tuple_len = int(self.get_len().unsigned)
         tuple = self.get_data()
@@ -762,9 +687,8 @@ class SetCharChildrenProvider:
 
     def update(self):
         self.child_list = []
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
 
         cur_pos = 0
         for child in self.value.children:
@@ -793,11 +717,7 @@ def create_set_children(value: lldb.SBValue, child_type: lldb.SBType, starting_p
     child_list: list[lldb.SBValue] = []
     cur_pos = starting_pos
 
-    if value.num_children > 0:
-        children = value.children
-    else:
-        children = [value]
-
+    children = value.children if value.num_children > 0 else [value]
     for child in children:
         child_val = child.signed
         if child_val != 0:
@@ -822,7 +742,7 @@ def create_set_children(value: lldb.SBValue, child_type: lldb.SBType, starting_p
 class SetIntChildrenProvider:
     def __init__(self, value: lldb.SBValue, internalDict):
         self.value = value
-        self.ty = self.value.target.FindFirstType(f"NI64")
+        self.ty = self.value.target.FindFirstType("NI64")
         self.child_list: list[lldb.SBValue] = []
         self.update()
 
@@ -837,9 +757,8 @@ class SetIntChildrenProvider:
 
     def update(self):
         self.child_list = []
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
         bits = self.value.GetByteSize() * 8
         starting_pos = -(bits // 2)
         self.child_list = create_set_children(self.value, self.ty, starting_pos)
@@ -851,7 +770,7 @@ class SetIntChildrenProvider:
 class SetUIntChildrenProvider:
     def __init__(self, value: lldb.SBValue, internalDict):
         self.value = value
-        self.ty = self.value.target.FindFirstType(f"NU64")
+        self.ty = self.value.target.FindFirstType("NU64")
         self.child_list: list[lldb.SBValue] = []
         self.update()
 
@@ -866,9 +785,8 @@ class SetUIntChildrenProvider:
 
     def update(self):
         self.child_list = []
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
         self.child_list = create_set_children(self.value, self.ty, starting_pos=0)
 
     def has_children(self):
@@ -892,9 +810,8 @@ class SetEnumChildrenProvider:
         return self.child_list[index]
 
     def update(self):
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
         self.child_list = create_set_children(self.value, self.ty, starting_pos=0)
 
     def has_children(self):
@@ -926,9 +843,8 @@ class TableChildrenProvider:
 
     def update(self):
         self.child_list = []
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
 
         tuple_len = int(self.get_len().unsigned)
         tuple = self.get_data()
@@ -981,9 +897,8 @@ class StringTableChildrenProvider:
         self.children.clear()
         self.child_list = []
 
-        if is_local(self.value):
-            if not is_in_scope(self.value):
-                return
+        if is_local(self.value) and not is_in_scope(self.value):
+            return
 
         tuple_len = int(self.get_len().unsigned)
         tuple = self.get_data()
@@ -1053,9 +968,7 @@ class LLDBBasicObjectProvider:
         self.value: lldb.SBValue = value
 
     def num_children(self):
-        if self.value is not None:
-            return self.value.num_children
-        return 0
+        return self.value.num_children if self.value is not None else 0
 
     def get_child_index(self, name: str):
         return self.value.GetIndexOfChildWithName(name)
@@ -1100,7 +1013,7 @@ class CustomObjectChildrenProvider:
 
 
 def echo(debugger: lldb.SBDebugger, command: str, result, internal_dict):
-    debugger.HandleCommand("po " + command)
+    debugger.HandleCommand(f"po {command}")
 
 
 SUMMARY_FUNCTIONS: dict[str, lldb.SBFunction] = {}
@@ -1128,16 +1041,13 @@ def get_custom_summary(value: lldb.SBValue) -> Union[str, None]:
         value = value.Dereference()
 
     if first_type.is_pointer:
-        command = f"{fn.name}(({first_type.name})" + str(value.GetLoadAddress()) + ");"
+        command = f"{fn.name}(({first_type.name}){str(value.GetLoadAddress())});"
     else:
-        command = f"{fn.name}(*({first_type.GetPointerType().name})" + str(value.GetLoadAddress()) + ");"
+        command = f"{fn.name}(*({first_type.GetPointerType().name}){str(value.GetLoadAddress())});"
 
     res = executeCommand(command)
 
-    if res.error.fail:
-        return None
-
-    return res.summary.strip('"')
+    return None if res.error.fail else res.summary.strip('"')
 
 
 def get_custom_value_summary(value: lldb.SBValue) -> Union[str, None]:
@@ -1147,13 +1057,10 @@ def get_custom_value_summary(value: lldb.SBValue) -> Union[str, None]:
     if fn is None:
         return None
 
-    command = f"{fn.name}(({value.type.name})" + str(value.signed) + ");"
+    command = f"{fn.name}(({value.type.name}){str(value.signed)});"
     res = executeCommand(command)
 
-    if res.error.fail:
-        return None
-
-    return res.summary.strip('"')
+    return None if res.error.fail else res.summary.strip('"')
 
 
 def get_custom_synthetic(value: lldb.SBValue) -> Union[lldb.SBValue, None]:
@@ -1230,11 +1137,9 @@ def use_base_type(ty: lldb.SBType) -> bool:
         "NU64",
     ]
 
-    for type_to_check in types_to_check:
-        if ty.name.startswith(type_to_check):
-            return False
-
-    return True
+    return not any(
+        ty.name.startswith(type_to_check) for type_to_check in types_to_check
+    )
 
 
 def breakpoint_function_wrapper(frame: lldb.SBFrame, bp_loc, internal_dict):
@@ -1267,7 +1172,7 @@ def breakpoint_function_wrapper(frame: lldb.SBFrame, bp_loc, internal_dict):
             continue
 
         fn_syms: lldb.SBSymbolContextList = target.FindFunctions(sym.name)
-        if not fn_syms.GetSize() > 0:
+        if fn_syms.GetSize() <= 0:
             continue
 
         fn_sym: lldb.SBSymbolContext = fn_syms.GetContextAtIndex(0)
@@ -1308,9 +1213,7 @@ def executeCommand(command, *args):
     expr_options.SetGenerateDebugInfo(True)
     expr_options.SetLanguage(lldb.eLanguageTypeC)
     expr_options.SetCoerceResultToId(True)
-    res = frame.EvaluateExpression(command, expr_options)
-
-    return res
+    return frame.EvaluateExpression(command, expr_options)
 
 
 def __lldb_init_module(debugger, internal_dict):

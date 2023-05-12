@@ -12,19 +12,15 @@ except ImportError:
   pass
 
 def main():
-  f = open("unidecode.dat", "wb+")
-  for x in range(128, 0xffff + 1):
-    u = eval("u'\\u%04x'" % x)
+  with open("unidecode.dat", "wb+") as f:
+    for x in range(128, 0xffff + 1):
+      u = eval("u'\\u%04x'" % x)
 
-    val = unidecode(u)
+      val = unidecode(u)
 
-    # f.write("%x | " % x)
-    if x == 0x2028: # U+2028 = LINE SEPARATOR
-      val = ""
-    elif x == 0x2029: # U+2029 = PARAGRAPH SEPARATOR
-      val = ""
-    f.write("%s\n" % val)
-
-  f.close()
+          # f.write("%x | " % x)
+      if x in [0x2028, 0x2029]: # U+2028 = LINE SEPARATOR
+        val = ""
+      f.write("%s\n" % val)
 
 main()

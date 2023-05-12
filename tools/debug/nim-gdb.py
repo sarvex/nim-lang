@@ -14,7 +14,7 @@ def printErrorOnce(id, message):
   global errorSet
   if id not in errorSet:
     errorSet.add(id)
-    gdb.write("printErrorOnce: " + message, gdb.STDERR)
+    gdb.write(f"printErrorOnce: {message}", gdb.STDERR)
 
 def debugPrint(x):
   gdb.write(str(x) + "\n", gdb.STDERR)
@@ -28,22 +28,18 @@ NIM_STRING_TYPES = ["NimStringDesc", "NimStringV2"]
 type_hash_regex = re.compile("^([A-Za-z0-9]*)_([A-Za-z0-9]*)_+([A-Za-z0-9]*)$")
 
 def getNimName(typ):
-  if m := type_hash_regex.match(typ):
-    return m.group(2)
-  return f"unknown <{typ}>"
+  return m.group(2) if (m := type_hash_regex.match(typ)) else f"unknown <{typ}>"
 
 def getNimRti(type_name):
   """ Return a ``gdb.Value`` object for the Nim Runtime Information of ``type_name``. """
 
-  # Get static const TNimType variable. This should be available for
-  # every non trivial Nim type.
-  m = type_hash_regex.match(type_name)
-  if m:
+  if m := type_hash_regex.match(type_name):
     lookups = [
-      "NTI" + m.group(2).lower() + "__" + m.group(3) + "_",
-      "NTI" + "__" + m.group(3) + "_",
-      "NTI" + m.group(2).replace("colon", "58").lower() + "__" + m.group(3) + "_"
-      ]
+        f"NTI{m.group(2).lower()}__{m.group(3)}_",
+        "NTI" + "__" + m.group(3) + "_",
+        "NTI" + m.group(2).replace("colon", "58").lower() + "__" + m.group(3) +
+        "_",
+    ]
     for l in lookups:
       try:
         return gdb.parse_and_eval(l)
@@ -103,14 +99,11 @@ class NimTypeRecognizer:
         # visualize 'string' as non pointer type (unpack pointer type).
         if target_type.name == "NimStringDesc":
           tname = target_type.name # could also just return 'string'
-        else:
-          rti = getNimRti(target_type.name)
-          if rti:
-            return getNameFromNimRti(rti)
+        elif rti := getNimRti(target_type.name):
+          return getNameFromNimRti(rti)
 
     if tname:
-      result = self.type_map_static.get(tname, None)
-      if result:
+      if result := self.type_map_static.get(tname, None):
         return result
       elif tname.startswith("tyEnum_"):
         return getNimName(tname)
@@ -119,8 +112,7 @@ class NimTypeRecognizer:
         fields = ", ".join([self.recognize(field.type) for field in type_obj.fields()])
         return f"({fields})"
 
-      rti = getNimRti(tname)
-      if rti:
+      if rti := getNimRti(tname):
         return getNameFromNimRti(rti)
 
     return None
@@ -171,7 +163,7 @@ class DollarPrintFunction (gdb.Function):
         func_value = gdb.lookup_global_symbol(func, gdb.SYMBOL_FUNCTIONS_DOMAIN).value()
         return func_value(arg)
 
-      elif arg_typ == argTypeName + " *":
+      elif arg_typ == f"{argTypeName} *":
         func_value = gdb.lookup_global_symbol(func, gdb.SYMBOL_FUNCTIONS_DOMAIN).value()
         return func_value(arg.address)
 
@@ -226,15 +218,11 @@ class DollarPrintCmd (gdb.Command):
 
   def invoke(self, arg, from_tty):
     param = gdb.parse_and_eval(arg)
-    strValue = DollarPrintFunction.invoke_static(param)
-    if strValue:
+    if strValue := DollarPrintFunction.invoke_static(param):
       gdb.write(
         str(NimStringPrinter(strValue)) + "\n",
         gdb.STDOUT
       )
-
-    # could not find a suitable dollar overload. This here is the
-    # fallback to get sensible output of basic types anyway.
 
     elif param.type.code == gdb.TYPE_CODE_ARRAY and param.type.target().name == "char":
       gdb.write(param.string("utf-8", "ignore") + "\n", gdb.STDOUT)
@@ -313,18 +301,12 @@ class NimBoolPrinter:
     self.val = val
 
   def to_string(self):
-    if self.val == 0:
-      return "false"
-    else:
-      return "true"
+    return "false" if self.val == 0 else "true"
 
 ################################################################################
 
 def strFromLazy(strVal):
-  if isinstance(strVal, str):
-    return strVal
-  else:
-    return strVal.value().string("utf-8")
+  return strVal if isinstance(strVal, str) else strVal.value().string("utf-8")
 
 class NimStringPrinter:
   pattern = re.compile(r'^(NimStringDesc \*|NimStringV2)$')
@@ -336,16 +318,15 @@ class NimStringPrinter:
     return 'string'
 
   def to_string(self):
-    if self.val:
-      if self.val.type.name == "NimStringV2":
-        l = int(self.val["len"])
-        data = self.val["p"]["data"]
-      else:
-        l = int(self.val['Sup']['len'])
-        data = self.val["data"]
-      return data.lazy_string(encoding="utf-8", length=l)
-    else:
+    if not self.val:
       return ""
+    if self.val.type.name == "NimStringV2":
+      l = int(self.val["len"])
+      data = self.val["p"]["data"]
+    else:
+      l = int(self.val['Sup']['len'])
+      data = self.val["data"]
+    return data.lazy_string(encoding="utf-8", length=l)
 
   def __str__(self):
     return strFromLazy(self.to_string())
@@ -378,7 +359,7 @@ def reprEnum(e, typ):
   return strFromLazy(NimEnumPrinter(val).to_string())
 
 def enumNti(typeNimName, idString):
-  typeInfoName = "NTI" + typeNimName.lower() + "__" + idString + "_"
+  typeInfoName = f"NTI{typeNimName.lower()}__{idString}_"
   nti = gdb.lookup_global_symbol(typeInfoName)
   if nti is None:
     typeInfoName = "NTI" + "__" + idString + "_"
@@ -409,7 +390,7 @@ class NimEnumPrinter:
       # dollar function for it
       return str(NimStringPrinter(dollarResult))
     else:
-      return self.typeNimName + "(" + str(int(self.val)) + ")"
+      return f"{self.typeNimName}({int(self.val)})"
 
 ################################################################################
 
@@ -434,7 +415,7 @@ class NimSetPrinter:
     while val > 0:
       if (val & 1) == 1:
         enumStrings.append(reprEnum(i, typ))
-      val = val >> 1
+      val >>= 1
       i += 1
 
     return '{' + ', '.join(enumStrings) + '}'
@@ -465,7 +446,7 @@ class NimHashSetPrinter:
       data = NimSeqPrinter(self.val['data'])
       for idxStr, entry in data.children():
         if int(entry['Field0']) > 0:
-          yield ("data." + idxStr + ".Field1", str(entry['Field1']))
+          yield (f"data.{idxStr}.Field1", str(entry['Field1']))
 
 ################################################################################
 
@@ -483,31 +464,22 @@ class NimSeq:
       self.isContent = val.type.name.endswith("Content")
 
   def __bool__(self):
-    if self.new:
-      return self.val is not None
-    else:
-      return bool(self.val)
+    return self.val is not None if self.new else bool(self.val)
 
   def __len__(self):
     if not self:
       return 0
     if self.new:
-      if self.isContent:
-        return int(self.val["cap"])
-      else:
-        return int(self.val["len"])
+      return int(self.val["cap"]) if self.isContent else int(self.val["len"])
     else:
       return self.val["Sup"]["len"]
 
   @property
   def data(self):
-    if self.new:
-      if self.isContent:
-        return self.val["data"]
-      elif self.val["p"]:
-        return self.val["p"]["data"]
-    else:
+    if self.new and self.isContent or not self.new:
       return self.val["data"]
+    elif self.val["p"]:
+      return self.val["p"]["data"]
 
   @property
   def cap(self):
@@ -536,25 +508,26 @@ class NimSeqPrinter:
     return f'seq({len(self.val)}, {self.val.cap})'
 
   def children(self):
-    if self.val:
-      val = self.val
-      length = len(val)
+    if not self.val:
+      return
+    val = self.val
+    length = len(val)
 
-      if length <= 0:
+    if length <= 0:
+      return
+
+    data = val.data
+
+    inaccessible = False
+    for i in range(length):
+      if inaccessible:
         return
-
-      data = val.data
-
-      inaccessible = False
-      for i in range(length):
-        if inaccessible:
-          return
-        try:
-          str(data[i])
-          yield "data[{0}]".format(i), data[i]
-        except RuntimeError:
-          inaccessible = True
-          yield "data[{0}]".format(i), "inaccessible"
+      try:
+        str(data[i])
+        yield "data[{0}]".format(i), data[i]
+      except RuntimeError:
+        inaccessible = True
+        yield "data[{0}]".format(i), "inaccessible"
       
 ################################################################################
 
@@ -602,8 +575,8 @@ class NimStringTablePrinter:
       data = NimSeqPrinter(self.val['data'].referenced_value())
       for idxStr, entry in data.children():
         if int(entry['Field0']) != 0:
-          yield (idxStr + ".Field0", entry['Field0'])
-          yield (idxStr + ".Field1", entry['Field1'])
+          yield (f"{idxStr}.Field0", entry['Field0'])
+          yield (f"{idxStr}.Field1", entry['Field1'])
 
 ################################################################
 
@@ -631,8 +604,8 @@ class NimTablePrinter:
       data = NimSeqPrinter(self.val['data'])
       for idxStr, entry in data.children():
         if int(entry['Field0']) != 0:
-          yield (idxStr + '.Field1', entry['Field1'])
-          yield (idxStr + '.Field2', entry['Field2'])
+          yield (f'{idxStr}.Field1', entry['Field1'])
+          yield (f'{idxStr}.Field2', entry['Field2'])
 
 ################################################################################
 
@@ -667,13 +640,13 @@ def makematcher(klass):
   def matcher(val):
     typeName = str(val.type)
     try:
-      if hasattr(klass, 'pattern') and hasattr(klass, '__name__'):
-        # print(typeName + " <> " + klass.__name__)
-        if klass.pattern.match(typeName):
-          return klass(val)
+      if (hasattr(klass, 'pattern') and hasattr(klass, '__name__')
+          and klass.pattern.match(typeName)):
+        return klass(val)
     except Exception as e:
       print(klass)
-      printErrorOnce(typeName, "No matcher for type '" + typeName + "': " + str(e) + "\n")
+      printErrorOnce(typeName, f"No matcher for type '{typeName}': {str(e)}" + "\n")
+
   return matcher
 
 def register_nim_pretty_printers_for_object(objfile):
